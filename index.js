@@ -332,13 +332,75 @@ async function runSyncCycle() {
     console.log(`[SYNC CYCLE END]`);
 }
 
-// Start HTTP server for Render health checks
+// Start HTTP server for Render health checks and secure API proxy endpoints
 const PORT = process.env.PORT || 10000;
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bullion D1 Sync Worker is active and running 24/7!\n');
+http.createServer(async (req, res) => {
+    // Add CORS headers so Android app can request safely
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+
+    const parsedUrl = urlModule.parse(req.url, true);
+    const path = parsedUrl.pathname;
+    const query = parsedUrl.query;
+
+    try {
+        if (path === '/api/live') {
+            const dbRes = await queryD1(
+                "SELECT p1.* FROM prices p1 JOIN (SELECT asset, MAX(date) as max_date FROM prices GROUP BY asset) p2 ON p1.asset = p2.asset AND p1.date = p2.max_date"
+            );
+            const results = dbRes.result?.[0]?.results || [];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(results));
+        }
+        else if (path === '/api/historical') {
+            const asset = query.asset;
+            const dbRes = await queryD1(
+                "SELECT date, open, high, low, close, timestamp FROM prices WHERE asset = ? ORDER BY date DESC",
+                [asset]
+            );
+            const results = dbRes.result?.[0]?.results || [];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(results));
+        }
+        else if (path === '/api/logged-dates') {
+            const asset = query.asset;
+            const dbRes = await queryD1(
+                "SELECT DISTINCT date((timestamp + 19800000)/1000, 'unixepoch') as date FROM intraday_prices WHERE asset = ? ORDER BY date DESC",
+                [asset]
+            );
+            const results = dbRes.result?.[0]?.results || [];
+            const datesList = results.map(r => r.date);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(datesList));
+        }
+        else if (path === '/api/ticks') {
+            const asset = query.asset;
+            const date = query.date; // YYYY-MM-DD
+            const dbRes = await queryD1(
+                "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND date((timestamp + 19800000)/1000, 'unixepoch') = ? ORDER BY timestamp DESC",
+                [asset, date]
+            );
+            const results = dbRes.result?.[0]?.results || [];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(results));
+        }
+        else {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end('Bullion D1 Sync Worker is active and running 24/7!\n');
+        }
+    } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+    }
 }).listen(PORT, () => {
-    console.log(`Health check HTTP server is listening on port ${PORT}`);
+    console.log(`API proxy server is listening on port ${PORT}`);
 });
 
 // Run every 10 seconds
