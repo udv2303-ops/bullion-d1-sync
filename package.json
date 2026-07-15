@@ -1,0 +1,13 @@
+{
+  "name": "bullion-d1-sync",
+  "version": "1.0.0",
+  "description": "Background price sync worker for Harikala Bullion, pushing to Cloudflare D1",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

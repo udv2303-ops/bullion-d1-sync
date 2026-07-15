@@ -1,0 +1,348 @@
+const http = require('http');
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+const https = require('https');
+const urlModule = require('url');
+
+// Cloudflare Credentials (loaded from Environment Variables for security)
+const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
+const DATABASE_ID = process.env.CLOUDFLARE_DATABASE_ID;
+const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+
+// Last cached prices to avoid duplicate logs in D1
+const lastPrices = {
+    "XAU_USD": 0.0,
+    "XAG_USD": 0.0,
+    "USD_INR": 0.0,
+    "GOLD_MCX": 0.0,
+    "SILVER_MCX": 0.0,
+    "GOLD_999_GST": 0.0
+};
+
+// Simple D1 query wrapper
+function queryD1(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        const payload = JSON.stringify({ sql, params });
+        const options = {
+            hostname: 'api.cloudflare.com',
+            path: `/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}/query`,
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${API_TOKEN}`,
+                'Content-Type': 'application/json',
+                'Content-Length': payload.length
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    try {
+                        resolve(JSON.parse(body));
+                    } catch (e) {
+                        reject(e);
+                    }
+                } else {
+                    reject(new Error(`D1 HTTP Error: ${res.statusCode} - ${body}`));
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.write(payload);
+        req.end();
+    });
+}
+
+// Fetch helper with HTTP Redirect Following
+function fetchUrl(url, headers = {}, redirectsLimit = 5) {
+    return new Promise((resolve, reject) => {
+        if (redirectsLimit < 0) {
+            reject(new Error("Too many redirects"));
+            return;
+        }
+
+        const parsedUrl = urlModule.parse(url);
+        const options = {
+            hostname: parsedUrl.hostname,
+            path: parsedUrl.path,
+            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                ...headers
+            }
+        };
+
+        const protocol = parsedUrl.protocol === 'https:' ? https : http;
+        
+        const req = protocol.request(options, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                const redirectUrl = urlModule.resolve(url, res.headers.location);
+                resolve(fetchUrl(redirectUrl, headers, redirectsLimit - 1));
+                return;
+            }
+
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    resolve(body);
+                } else {
+                    reject(new Error(`HTTP ${res.statusCode} from ${url}`));
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+function toDoubleSafe(value) {
+    if (value === null || value === undefined) return 0.0;
+    const num = Number(value);
+    return isNaN(num) ? 0.0 : num;
+}
+
+// Get current date string in IST timezone (YYYY-MM-DD)
+function getIstDateString() {
+    const d = new Date();
+    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+    return istTime.toISOString().split('T')[0];
+}
+
+async function saveIntradayTick(asset, price) {
+    const currentPrice = toDoubleSafe(price);
+    if (currentPrice <= 0.0) return;
+
+    // Check if the price has changed from our cached last price to avoid spamming the DB
+    if (lastPrices[asset] === currentPrice) {
+        return;
+    }
+
+    lastPrices[asset] = currentPrice;
+    const timestamp = Date.now();
+
+    try {
+        await queryD1(
+            "INSERT INTO intraday_prices (asset, price, timestamp) VALUES (?, ?, ?)",
+            [asset, currentPrice, timestamp]
+        );
+        console.log(`[TICK] Inserted ${asset}: ${currentPrice}`);
+    } catch (e) {
+        console.error(`[TICK ERROR] Failed to save tick for ${asset}:`, e.message);
+    }
+}
+
+async function saveDailySummary(asset, dateStr, open, high, low, close) {
+    try {
+        const timestamp = Date.now();
+        const checkRes = await queryD1(
+            "SELECT id, open, high, low FROM prices WHERE asset = ? AND date = ?",
+            [asset, dateStr]
+        );
+        const rows = checkRes.result?.[0]?.results || [];
+
+        if (rows.length > 0) {
+            const existing = rows[0];
+            const updatedOpen = existing.open || open;
+            const updatedHigh = Math.max(existing.high || 0.0, high);
+            const updatedLow = existing.low <= 0.0 ? low : Math.min(existing.low, low);
+
+            await queryD1(
+                "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
+                [updatedOpen, updatedHigh, updatedLow, close, timestamp, existing.id]
+            );
+        } else {
+            await queryD1(
+                "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [asset, dateStr, open, high, low, close, timestamp]
+            );
+        }
+    } catch (e) {
+        console.error(`[SUMMARY ERROR] Failed to save daily summary for ${asset}:`, e.message);
+    }
+}
+
+// 1. Sync Spot Assets (Gold, Silver, USD_INR) via Yahoo Finance API (COMEX GC=F, SI=F, INR=X)
+async function syncSpotAsset(assetName, yahooTicker) {
+    try {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=1d&range=5d`;
+        const raw = await fetchUrl(url);
+        const yahooData = JSON.parse(raw);
+        const result = yahooData.chart?.result?.[0];
+        
+        if (result && result.indicators && result.indicators.quote && result.indicators.quote[0]) {
+            const quote = result.indicators.quote[0];
+            const idx = quote.close.length - 1;
+            
+            const openVal = toDoubleSafe(quote.open[idx]);
+            const closeVal = toDoubleSafe(quote.close[idx]);
+            const highVal = toDoubleSafe(quote.high[idx]) || closeVal;
+            const lowVal = toDoubleSafe(quote.low[idx]) || closeVal;
+            
+            if (closeVal > 0.0) {
+                const dateStr = getIstDateString();
+                await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                await saveIntradayTick(assetName, closeVal);
+            }
+        }
+    } catch (e) {
+        console.error(`Error syncing spot asset ${assetName}:`, e.message);
+    }
+}
+
+// 2. Sync MCX Assets (Gold, Silver)
+async function syncMcxAsset(assetName, pageUrl, symbolPrefix) {
+    try {
+        const html = await fetchUrl(pageUrl);
+        
+        let expiryDate = null;
+        const expiryDates = [];
+
+        const defaultExpiryMatch = html.match(/"default_expiry"\s*:\s*\[\s*"([^"]+)"/i);
+        if (defaultExpiryMatch) {
+            expiryDate = defaultExpiryMatch[1];
+        }
+
+        const dataListMatch = html.match(/"dataList"\s*:\s*\[(.*?)\]\s*,\s*"default_expiry"/i);
+        if (dataListMatch) {
+            const dlContent = dataListMatch[1];
+            const dateMatches = dlContent.match(/"\d{4}-\d{2}-\d{2}"/g) || [];
+            dateMatches.forEach(d => expiryDates.push(d.replace(/"/g, '')));
+        }
+
+        if (!expiryDate) return;
+
+        // Apply Option A Rollover Logic
+        if (expiryDates.length > 1) {
+            const parts = expiryDate.split("-");
+            if (parts.length === 3) {
+                const expYear = parseInt(parts[0]);
+                const expMonth = parseInt(parts[1]);
+                const expDay = parseInt(parts[2]);
+
+                let rollMonth = expMonth - 1;
+                let rollYear = expYear;
+                if (rollMonth === 0) {
+                    rollMonth = 12;
+                    rollYear -= 1;
+                }
+
+                const today = new Date();
+                const todayYear = today.getFullYear();
+                const todayMonth = today.getMonth() + 1;
+                const todayDay = today.getDate();
+
+                const switchDay = rollMonth === 2 ? 28 : 30;
+
+                const isRolloverMonth = (todayYear === rollYear && todayMonth === rollMonth && todayDay >= switchDay);
+                const isExpiryMonthBeforeExpiry = (todayYear === expYear && todayMonth === expMonth && todayDay < expDay);
+
+                if (isRolloverMonth || isExpiryMonthBeforeExpiry) {
+                    if (expiryDates[1]) {
+                        expiryDate = expiryDates[1];
+                    }
+                }
+            }
+        }
+
+        const toTimestamp = Math.floor(Date.now() / 1000);
+        const fromTimestamp = toTimestamp - 5 * 24 * 3600;
+
+        const sym = `${symbolPrefix}_${expiryDate}_MCX`;
+        const historyUrl = `https://priceapi.moneycontrol.com/techCharts/commodity/history?symbol=${sym}&resolution=D&from=${fromTimestamp}&to=${toTimestamp}`;
+        const raw = await fetchUrl(historyUrl);
+        const tvcData = JSON.parse(raw);
+
+        if (tvcData.s === "ok" && tvcData.t && tvcData.o) {
+            const dateStr = getIstDateString();
+            const idx = tvcData.t.length - 1;
+
+            const openVal = toDoubleSafe(tvcData.o[idx]);
+            const closeVal = toDoubleSafe(tvcData.c[idx]);
+            const highVal = toDoubleSafe(tvcData.h[idx]) || closeVal;
+            const lowVal = toDoubleSafe(tvcData.l[idx]) || closeVal;
+
+            if (closeVal > 0.0) {
+                await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                await saveIntradayTick(assetName, closeVal);
+            }
+        }
+    } catch (e) {
+        console.error(`Error syncing MCX asset ${assetName}:`, e.message);
+    }
+}
+
+// 3. Sync Harikala GST Price
+async function syncHarikalaGst() {
+    try {
+        const d = new Date();
+        const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+        const hour = istTime.getUTCHours();
+        const minute = istTime.getUTCMinutes();
+        const minutesSinceMidnight = hour * 60 + minute;
+        
+        const startMinutes = 9 * 60;          // 09:00 AM IST
+        const endMinutes = 23 * 60 + 50;      // 11:50 PM IST
+
+        if (minutesSinceMidnight < startMinutes || minutesSinceMidnight > endMinutes) {
+            return;
+        }
+
+        const url = "https://bcast.harikalabullion.com:7768/VOTSBroadcastStreaming/Services/xml/GetLiveRateByTemplateID/harikala";
+        const raw = await fetchUrl(url);
+        const lines = raw.split("\n");
+        for (const line of lines) {
+            if (line.includes("GOLD 999 IMP WITH GST (Today)")) {
+                const parts = line.split("\t");
+                if (parts.length >= 7) {
+                    const closeVal = toDoubleSafe(parts[4]);
+                    if (closeVal > 0.0) {
+                        const dateStr = getIstDateString();
+                        await saveDailySummary("GOLD_999_GST", dateStr, closeVal, closeVal, closeVal, closeVal);
+                        await saveIntradayTick("GOLD_999_GST", closeVal);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Error syncing Harikala GST price:", e.message);
+    }
+}
+
+// Main sync scheduling loop
+async function runSyncCycle() {
+    console.log(`[SYNC CYCLE START] ${new Date().toISOString()}`);
+    
+    // Spot Assets via Yahoo Finance
+    await syncSpotAsset("XAU_USD", "GC=F");
+    await syncSpotAsset("XAG_USD", "SI=F");
+    await syncSpotAsset("USD_INR", "INR=X");
+
+    // MCX Assets
+    await syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD");
+    await syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER");
+
+    // Harikala GST
+    await syncHarikalaGst();
+
+    console.log(`[SYNC CYCLE END]`);
+}
+
+// Start HTTP server for Render health checks
+const PORT = process.env.PORT || 10000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bullion D1 Sync Worker is active and running 24/7!\n');
+}).listen(PORT, () => {
+    console.log(`Health check HTTP server is listening on port ${PORT}`);
+});
+
+// Run every 10 seconds
+setInterval(runSyncCycle, 10000);
+
+// Run immediately on launch
+runSyncCycle();
