@@ -471,6 +471,22 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
         }
+        else if (path === '/api/clean-old-data') {
+            logDebug("[MAINTENANCE] Cleaning old spot gold/silver history...");
+            const delPrices = await queryD1(
+                "DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND date < '2026-07-16'"
+            );
+            const delTicks = await queryD1(
+                "DELETE FROM intraday_prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND timestamp < 1784208300000"
+            );
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ 
+                success: true, 
+                message: "Old spot gold/silver history deleted successfully.", 
+                delPricesResult: delPrices, 
+                delTicksResult: delTicks 
+            }));
+        }
         else if (path === '/api/debug-logs') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(debugLogs));
