@@ -117,10 +117,7 @@ async function saveIntradayTick(asset, price) {
     const currentPrice = toDoubleSafe(price);
     if (currentPrice <= 0.0) return;
 
-    // Check if the price has changed from our cached last price to avoid spamming the DB
-    if (lastPrices[asset] === currentPrice) {
-        return;
-    }
+    // We record ticks unconditionally every 10 seconds as requested (even if the rate is identical)
 
     lastPrices[asset] = currentPrice;
     const timestamp = Date.now();
