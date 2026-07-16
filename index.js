@@ -167,26 +167,49 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
 }
 
 // 1. Sync Spot Assets (Gold, Silver, USD_INR) via Yahoo Finance API (COMEX GC=F, SI=F, INR=X)
-async function syncSpotAsset(assetName, yahooTicker) {
+async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
     try {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=1d&range=5d`;
+        const range = syncHistory ? "30d" : "5d";
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=1d&range=${range}`;
         const raw = await fetchUrl(url);
         const yahooData = JSON.parse(raw);
         const result = yahooData.chart?.result?.[0];
         
-        if (result && result.indicators && result.indicators.quote && result.indicators.quote[0]) {
+        if (result && result.timestamp && result.indicators && result.indicators.quote && result.indicators.quote[0]) {
             const quote = result.indicators.quote[0];
-            const idx = quote.close.length - 1;
+            const timestamps = result.timestamp;
             
-            const openVal = toDoubleSafe(quote.open[idx]);
-            const closeVal = toDoubleSafe(quote.close[idx]);
-            const highVal = toDoubleSafe(quote.high[idx]) || closeVal;
-            const lowVal = toDoubleSafe(quote.low[idx]) || closeVal;
-            
-            if (closeVal > 0.0) {
-                const dateStr = getIstDateString();
-                await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
-                await saveIntradayTick(assetName, closeVal);
+            if (syncHistory) {
+                // Loop through all historical data points to fill in D1 database
+                for (let i = 0; i < timestamps.length; i++) {
+                    const openVal = toDoubleSafe(quote.open[i]);
+                    const closeVal = toDoubleSafe(quote.close[i]);
+                    const highVal = toDoubleSafe(quote.high[i]) || closeVal;
+                    const lowVal = toDoubleSafe(quote.low[i]) || closeVal;
+                    
+                    if (closeVal > 0.0) {
+                        const date = new Date(timestamps[i] * 1000);
+                        const istTime = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+                        const dateStr = istTime.toISOString().split('T')[0];
+                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                    }
+                }
+                console.log(`[HISTORY] Synced ${timestamps.length} historical entries for ${assetName}`);
+            } else {
+                // Only sync the latest element for the 10-second tick
+                const idx = timestamps.length - 1;
+                if (idx >= 0) {
+                    const openVal = toDoubleSafe(quote.open[idx]);
+                    const closeVal = toDoubleSafe(quote.close[idx]);
+                    const highVal = toDoubleSafe(quote.high[idx]) || closeVal;
+                    const lowVal = toDoubleSafe(quote.low[idx]) || closeVal;
+                    
+                    if (closeVal > 0.0) {
+                        const dateStr = getIstDateString();
+                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        await saveIntradayTick(assetName, closeVal);
+                    }
+                }
             }
         }
     } catch (e) {
@@ -195,7 +218,7 @@ async function syncSpotAsset(assetName, yahooTicker) {
 }
 
 // 2. Sync MCX Assets (Gold, Silver)
-async function syncMcxAsset(assetName, pageUrl, symbolPrefix) {
+async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = false) {
     try {
         const html = await fetchUrl(pageUrl);
         
@@ -250,7 +273,8 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix) {
         }
 
         const toTimestamp = Math.floor(Date.now() / 1000);
-        const fromTimestamp = toTimestamp - 5 * 24 * 3600;
+        const daysBack = syncHistory ? 30 : 5;
+        const fromTimestamp = toTimestamp - daysBack * 24 * 3600;
 
         const sym = `${symbolPrefix}_${expiryDate}_MCX`;
         const historyUrl = `https://priceapi.moneycontrol.com/techCharts/commodity/history?symbol=${sym}&resolution=D&from=${fromTimestamp}&to=${toTimestamp}`;
@@ -258,17 +282,36 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix) {
         const tvcData = JSON.parse(raw);
 
         if (tvcData.s === "ok" && tvcData.t && tvcData.o) {
-            const dateStr = getIstDateString();
-            const idx = tvcData.t.length - 1;
+            if (syncHistory) {
+                // Loop through all historical data points to fill in D1 database
+                for (let i = 0; i < tvcData.t.length; i++) {
+                    const openVal = toDoubleSafe(tvcData.o[i]);
+                    const closeVal = toDoubleSafe(tvcData.c[i]);
+                    const highVal = toDoubleSafe(tvcData.h[i]) || closeVal;
+                    const lowVal = toDoubleSafe(tvcData.l[i]) || closeVal;
 
-            const openVal = toDoubleSafe(tvcData.o[idx]);
-            const closeVal = toDoubleSafe(tvcData.c[idx]);
-            const highVal = toDoubleSafe(tvcData.h[idx]) || closeVal;
-            const lowVal = toDoubleSafe(tvcData.l[idx]) || closeVal;
+                    if (closeVal > 0.0) {
+                        const date = new Date(tvcData.t[i] * 1000);
+                        const istTime = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+                        const dateStr = istTime.toISOString().split('T')[0];
+                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                    }
+                }
+                console.log(`[HISTORY] Synced ${tvcData.t.length} historical entries for ${assetName}`);
+            } else {
+                const dateStr = getIstDateString();
+                const idx = tvcData.t.length - 1;
+                if (idx >= 0) {
+                    const openVal = toDoubleSafe(tvcData.o[idx]);
+                    const closeVal = toDoubleSafe(tvcData.c[idx]);
+                    const highVal = toDoubleSafe(tvcData.h[idx]) || closeVal;
+                    const lowVal = toDoubleSafe(tvcData.l[idx]) || closeVal;
 
-            if (closeVal > 0.0) {
-                await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
-                await saveIntradayTick(assetName, closeVal);
+                    if (closeVal > 0.0) {
+                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        await saveIntradayTick(assetName, closeVal);
+                    }
+                }
             }
         }
     } catch (e) {
@@ -313,18 +356,38 @@ async function syncHarikalaGst() {
     }
 }
 
+let lastHistoricalSyncTime = 0;
+
 // Main sync scheduling loop
 async function runSyncCycle() {
     console.log(`[SYNC CYCLE START] ${new Date().toISOString()}`);
     
-    // Spot Assets via Yahoo Finance
-    await syncSpotAsset("XAU_USD", "GC=F");
-    await syncSpotAsset("XAG_USD", "SI=F");
-    await syncSpotAsset("USD_INR", "INR=X");
+    const now = Date.now();
+    const shouldSyncHistory = (now - lastHistoricalSyncTime > 12 * 60 * 60 * 1000); // every 12 hours
+    
+    if (shouldSyncHistory) {
+        console.log("[HISTORICAL SYNC START]");
+        lastHistoricalSyncTime = now;
+        
+        // Spot Assets Historical (30 days range)
+        await syncSpotAsset("XAU_USD", "GC=F", true);
+        await syncSpotAsset("XAG_USD", "SI=F", true);
+        await syncSpotAsset("USD_INR", "INR=X", true);
 
-    // MCX Assets
-    await syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD");
-    await syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER");
+        // MCX Assets Historical (30 days range)
+        await syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true);
+        await syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true);
+        console.log("[HISTORICAL SYNC END]");
+    }
+
+    // Spot Assets Live (10s interval, updates latest quote and tick)
+    await syncSpotAsset("XAU_USD", "GC=F", false);
+    await syncSpotAsset("XAG_USD", "SI=F", false);
+    await syncSpotAsset("USD_INR", "INR=X", false);
+
+    // MCX Assets Live (10s interval, updates latest quote and tick)
+    await syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false);
+    await syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false);
 
     // Harikala GST
     await syncHarikalaGst();
