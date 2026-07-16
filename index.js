@@ -387,8 +387,8 @@ async function runSyncCycle() {
         // Run historical backfills in parallel to save startup time
         try {
             await Promise.all([
-                syncSpotAsset("XAU_USD", "GC=F", true),
-                syncSpotAsset("XAG_USD", "SI=F", true),
+                syncSpotAsset("XAU_USD", "XAUUSD=X", true),
+                syncSpotAsset("XAG_USD", "XAGUSD=X", true),
                 syncSpotAsset("USD_INR", "INR=X", true),
                 syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true),
                 syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
@@ -402,8 +402,8 @@ async function runSyncCycle() {
     // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
     try {
         await Promise.all([
-            syncSpotAsset("XAU_USD", "GC=F", false),
-            syncSpotAsset("XAG_USD", "SI=F", false),
+            syncSpotAsset("XAU_USD", "XAUUSD=X", false),
+            syncSpotAsset("XAG_USD", "XAGUSD=X", false),
             syncSpotAsset("USD_INR", "INR=X", false),
             syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false),
             syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false),
