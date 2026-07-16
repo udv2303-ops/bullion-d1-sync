@@ -210,6 +210,27 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
     }
 }
 
+// 1b. Sync Spot Assets (Gold, Silver) via free gold-api.com API (Real-time Spot prices)
+async function syncSpotAssetGoldApi(assetName, symbol) {
+    try {
+        const url = `https://api.gold-api.com/price/${symbol}`;
+        const raw = await fetchUrl(url);
+        const data = JSON.parse(raw);
+        
+        if (data && data.price > 0.0) {
+            const closeVal = toDoubleSafe(data.price);
+            const dateStr = getIstDateString();
+            
+            // For live spot, we use the close price as open/high/low/close since it's a real-time feed
+            await saveDailySummary(assetName, dateStr, closeVal, closeVal, closeVal, closeVal);
+            await saveIntradayTick(assetName, closeVal);
+            logDebug(`[TICK-SPOT] Synced ${assetName} from Gold-API: ${closeVal}`);
+        }
+    } catch (e) {
+        logDebug(`Error syncing spot asset ${assetName} from Gold-API: ${e.message}`);
+    }
+}
+
 // 2. Sync MCX Assets (Gold, Silver)
 async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = false) {
     try {
@@ -365,8 +386,8 @@ async function runSyncCycle() {
         // Run historical backfills in parallel to save startup time
         try {
             await Promise.all([
-                syncSpotAsset("XAU_USD", "XAUUSD=X", true),
-                syncSpotAsset("XAG_USD", "XAGUSD=X", true),
+                syncSpotAsset("XAU_USD", "GC=F", true),
+                syncSpotAsset("XAG_USD", "SI=F", true),
                 syncSpotAsset("USD_INR", "INR=X", true),
                 syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true),
                 syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
@@ -380,8 +401,8 @@ async function runSyncCycle() {
     // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
     try {
         await Promise.all([
-            syncSpotAsset("XAU_USD", "XAUUSD=X", false),
-            syncSpotAsset("XAG_USD", "XAGUSD=X", false),
+            syncSpotAssetGoldApi("XAU_USD", "XAU"),
+            syncSpotAssetGoldApi("XAG_USD", "XAG"),
             syncSpotAsset("USD_INR", "INR=X", false),
             syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false),
             syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false),
