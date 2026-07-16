@@ -210,26 +210,7 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
     }
 }
 
-// 1b. Sync Spot Assets (Gold, Silver) via free gold-api.com API (Real-time Spot prices)
-async function syncSpotAssetGoldApi(assetName, symbol) {
-    try {
-        const url = `https://api.gold-api.com/price/${symbol}`;
-        const raw = await fetchUrl(url);
-        const data = JSON.parse(raw);
-        
-        if (data && data.price > 0.0) {
-            const closeVal = toDoubleSafe(data.price);
-            const dateStr = getIstDateString();
-            
-            // For live spot, we use the close price as open/high/low/close since it's a real-time feed
-            await saveDailySummary(assetName, dateStr, closeVal, closeVal, closeVal, closeVal);
-            await saveIntradayTick(assetName, closeVal);
-            logDebug(`[TICK-SPOT] Synced ${assetName} from Gold-API: ${closeVal}`);
-        }
-    } catch (e) {
-        logDebug(`Error syncing spot asset ${assetName} from Gold-API: ${e.message}`);
-    }
-}
+
 
 // 2. Sync MCX Assets (Gold, Silver)
 async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = false) {
@@ -333,40 +314,67 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
     }
 }
 
-// 3. Sync Harikala GST Price
-async function syncHarikalaGst() {
+// 3. Sync Harikala Broadcast Rates (Spot Gold, Spot Silver, USD_INR, and GOLD_999_GST)
+async function syncHarikalaBroadcast() {
     try {
-        const d = new Date();
-        const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
-        const hour = istTime.getUTCHours();
-        const minute = istTime.getUTCMinutes();
-        const minutesSinceMidnight = hour * 60 + minute;
-        
-        const startMinutes = 9 * 60;          // 09:00 AM IST
-        const endMinutes = 23 * 60 + 50;      // 11:50 PM IST
-
-        if (minutesSinceMidnight < startMinutes || minutesSinceMidnight > endMinutes) {
-            return;
-        }
-
         const url = "https://bcast.harikalabullion.com:7768/VOTSBroadcastStreaming/Services/xml/GetLiveRateByTemplateID/harikala";
         const raw = await fetchUrl(url);
         const lines = raw.split("\n");
-        for (const line of lines) {
-            if (line.includes("GOLD 999 IMP WITH GST (Today)")) {
-                const parts = line.split("\t");
-                if (parts.length >= 7) {
-                    const closeVal = toDoubleSafe(parts[4]);
-                    if (closeVal > 0.0) {
-                        const dateStr = getIstDateString();
-                        await saveDailySummary("GOLD_999_GST", dateStr, closeVal, closeVal, closeVal, closeVal);
-                        await saveIntradayTick("GOLD_999_GST", closeVal);
-                    }
+        const dateStr = getIstDateString();
+        
+        for (let line of lines) {
+            line = line.trim();
+            if (!line) continue;
+            
+            const parts = line.split("\t").map(p => p.trim());
+            if (parts.length < 5) continue;
+            
+            const name = parts[1]; // Index 1 is the asset name
+            const closeVal = toDoubleSafe(parts[3]); // Index 3 is the close/ask price
+            const bidVal = parts[2] === '-' ? closeVal : toDoubleSafe(parts[2]); // Index 2 is bid/open
+            const highVal = parts[4] ? toDoubleSafe(parts[4]) : closeVal;
+            const lowVal = parts[5] ? toDoubleSafe(parts[5]) : closeVal;
+            
+            if (closeVal <= 0.0) continue;
+            
+            if (name === "GOLD") {
+                // Spot Gold
+                await saveDailySummary("XAU_USD", dateStr, bidVal, highVal, lowVal, closeVal);
+                await saveIntradayTick("XAU_USD", closeVal);
+                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal}`);
+            }
+            else if (name === "SILVER") {
+                // Spot Silver
+                await saveDailySummary("XAG_USD", dateStr, bidVal, highVal, lowVal, closeVal);
+                await saveIntradayTick("XAG_USD", closeVal);
+                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal}`);
+            }
+            else if (name === "INR") {
+                // USD/INR
+                await saveDailySummary("USD_INR", dateStr, bidVal, highVal, lowVal, closeVal);
+                await saveIntradayTick("USD_INR", closeVal);
+                logDebug(`[HARIKALA-SPOT] Synced USD_INR: ${closeVal}`);
+            }
+            else if (name === "GOLD 999 IMP WITH GST (Today)") {
+                // GST Gold (Only during active trading hours: 09:00 AM - 11:50 PM IST)
+                const d = new Date();
+                const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+                const hour = istTime.getUTCHours();
+                const minute = istTime.getUTCMinutes();
+                const minutesSinceMidnight = hour * 60 + minute;
+                
+                const startMinutes = 9 * 60;
+                const endMinutes = 23 * 60 + 50;
+                
+                if (minutesSinceMidnight >= startMinutes && minutesSinceMidnight <= endMinutes) {
+                    await saveDailySummary("GOLD_999_GST", dateStr, bidVal, highVal, lowVal, closeVal);
+                    await saveIntradayTick("GOLD_999_GST", closeVal);
+                    logDebug(`[HARIKALA-SPOT] Synced GOLD_999_GST: ${closeVal}`);
                 }
             }
         }
     } catch (e) {
-        logDebug(`Error syncing Harikala GST price: ${e.message}`);
+        logDebug(`Error syncing Harikala Broadcast: ${e.message}`);
     }
 }
 
@@ -401,12 +409,9 @@ async function runSyncCycle() {
     // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
     try {
         await Promise.all([
-            syncSpotAssetGoldApi("XAU_USD", "XAU"),
-            syncSpotAssetGoldApi("XAG_USD", "XAG"),
-            syncSpotAsset("USD_INR", "INR=X", false),
+            syncHarikalaBroadcast(),
             syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false),
-            syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false),
-            syncHarikalaGst()
+            syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false)
         ]);
     } catch (err) {
         logDebug(`Error in parallel live sync: ${err.message}`);
