@@ -8,6 +8,18 @@ const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const DATABASE_ID = process.env.CLOUDFLARE_DATABASE_ID;
 const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 
+// In-memory debug logs buffer (max 100 entries)
+const debugLogs = [];
+function logDebug(msg) {
+    const timeStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+    const fullMsg = `[IST ${timeStr}] ${msg}`;
+    console.log(fullMsg);
+    debugLogs.push(fullMsg);
+    if (debugLogs.length > 100) {
+        debugLogs.shift();
+    }
+}
+
 // Last cached prices to avoid duplicate logs in D1
 const lastPrices = {
     "XAU_USD": 0.0,
@@ -41,15 +53,21 @@ function queryD1(sql, params = []) {
                     try {
                         resolve(JSON.parse(body));
                     } catch (e) {
+                        logDebug(`D1 JSON Parse Error: ${e.message}`);
                         reject(e);
                     }
                 } else {
-                    reject(new Error(`D1 HTTP Error: ${res.statusCode} - ${body}`));
+                    const errMsg = `D1 HTTP Error: ${res.statusCode} - ${body}`;
+                    logDebug(errMsg);
+                    reject(new Error(errMsg));
                 }
             });
         });
 
-        req.on('error', reject);
+        req.on('error', (e) => {
+            logDebug(`D1 Request Network Error: ${e.message}`);
+            reject(e);
+        });
         req.write(payload);
         req.end();
     });
@@ -127,9 +145,9 @@ async function saveIntradayTick(asset, price) {
             "INSERT INTO intraday_prices (asset, price, timestamp) VALUES (?, ?, ?)",
             [asset, currentPrice, timestamp]
         );
-        console.log(`[TICK] Inserted ${asset}: ${currentPrice}`);
+        logDebug(`[TICK] Inserted ${asset}: ${currentPrice}`);
     } catch (e) {
-        console.error(`[TICK ERROR] Failed to save tick for ${asset}:`, e.message);
+        logDebug(`[TICK ERROR] Failed to save tick for ${asset}: ${e.message}`);
     }
 }
 
@@ -159,7 +177,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
             );
         }
     } catch (e) {
-        console.error(`[SUMMARY ERROR] Failed to save daily summary for ${asset}:`, e.message);
+        logDebug(`[SUMMARY ERROR] Failed to save daily summary for ${asset}: ${e.message}`);
     }
 }
 
@@ -453,6 +471,16 @@ http.createServer(async (req, res) => {
                 "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND date((timestamp + 19800000)/1000, 'unixepoch') = ? ORDER BY timestamp DESC",
                 [asset, date]
             );
+            const results = dbRes.result?.[0]?.results || [];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(results));
+        }
+        else if (path === '/api/debug-logs') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(debugLogs));
+        }
+        else if (path === '/api/debug-db') {
+            const dbRes = await queryD1("SELECT * FROM intraday_prices ORDER BY timestamp DESC LIMIT 20");
             const results = dbRes.result?.[0]?.results || [];
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
