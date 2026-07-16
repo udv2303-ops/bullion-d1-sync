@@ -25,7 +25,6 @@ function logDebug(msg) {
 const lastPrices = {
     "XAU_USD": 0.0,
     "XAG_USD": 0.0,
-    "USD_INR": 0.0,
     "GOLD_MCX": 0.0,
     "SILVER_MCX": 0.0,
     "GOLD_999_GST": 0.0
@@ -349,12 +348,6 @@ async function syncHarikalaBroadcast() {
                 await saveIntradayTick("XAG_USD", closeVal);
                 logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal}`);
             }
-            else if (name === "INR") {
-                // USD/INR
-                await saveDailySummary("USD_INR", dateStr, bidVal, highVal, lowVal, closeVal);
-                await saveIntradayTick("USD_INR", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced USD_INR: ${closeVal}`);
-            }
             else if (name === "GOLD 999 IMP WITH GST (Today)") {
                 // GST Gold (Only during active trading hours: 09:00 AM - 11:50 PM IST)
                 const d = new Date();
@@ -396,7 +389,6 @@ async function runSyncCycle() {
             await Promise.all([
                 syncSpotAsset("XAU_USD", "GC=F", true),
                 syncSpotAsset("XAG_USD", "SI=F", true),
-                syncSpotAsset("USD_INR", "INR=X", true),
                 syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true),
                 syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
             ]);
