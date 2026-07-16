@@ -210,58 +210,6 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
     }
 }
 
-// 1b. Sync Spot Assets (Gold, Silver) via Investing.com TVC API
-async function syncSpotAssetInvesting(assetName, symbolId, syncHistory = false) {
-    try {
-        const toTimestamp = Math.floor(Date.now() / 1000);
-        const daysBack = syncHistory ? 30 : 5;
-        const fromTimestamp = toTimestamp - daysBack * 24 * 3600;
-        
-        const carrierUuid = '39a674ee5d5d4dbda6fb886f6a782bb8';
-        const url = `https://tvc6.investing.com/${carrierUuid}/0/0/0/0/history?symbol=${symbolId}&resolution=D&from=${fromTimestamp}&to=${toTimestamp}`;
-        
-        const raw = await fetchUrl(url, {
-            'Referer': 'https://tvc-invdn-com.investing.com/'
-        });
-        const tvcData = JSON.parse(raw);
-        
-        if (tvcData.s === "ok" && tvcData.t && tvcData.o) {
-            if (syncHistory) {
-                for (let i = 0; i < tvcData.t.length; i++) {
-                    const openVal = toDoubleSafe(tvcData.o[i]);
-                    const closeVal = toDoubleSafe(tvcData.c[i]);
-                    const highVal = toDoubleSafe(tvcData.h[i]) || closeVal;
-                    const lowVal = toDoubleSafe(tvcData.l[i]) || closeVal;
-                    
-                    if (closeVal > 0.0) {
-                        const date = new Date(tvcData.t[i] * 1000);
-                        const istTime = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
-                        const dateStr = istTime.toISOString().split('T')[0];
-                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
-                    }
-                }
-                console.log(`[HISTORY-INVESTING] Synced ${tvcData.t.length} entries for ${assetName}`);
-            } else {
-                const dateStr = getIstDateString();
-                const idx = tvcData.t.length - 1;
-                if (idx >= 0) {
-                    const openVal = toDoubleSafe(tvcData.o[idx]);
-                    const closeVal = toDoubleSafe(tvcData.c[idx]);
-                    const highVal = toDoubleSafe(tvcData.h[idx]) || closeVal;
-                    const lowVal = toDoubleSafe(tvcData.l[idx]) || closeVal;
-                    
-                    if (closeVal > 0.0) {
-                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
-                        await saveIntradayTick(assetName, closeVal);
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        console.error(`Error syncing spot asset ${assetName} from Investing.com:`, e.message);
-    }
-}
-
 // 2. Sync MCX Assets (Gold, Silver)
 async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = false) {
     try {
@@ -417,8 +365,8 @@ async function runSyncCycle() {
         // Run historical backfills in parallel to save startup time
         try {
             await Promise.all([
-                syncSpotAssetInvesting("XAU_USD", 68, true),
-                syncSpotAssetInvesting("XAG_USD", 69, true),
+                syncSpotAsset("XAU_USD", "XAUUSD=X", true),
+                syncSpotAsset("XAG_USD", "XAGUSD=X", true),
                 syncSpotAsset("USD_INR", "INR=X", true),
                 syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true),
                 syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
@@ -432,8 +380,8 @@ async function runSyncCycle() {
     // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
     try {
         await Promise.all([
-            syncSpotAssetInvesting("XAU_USD", 68, false),
-            syncSpotAssetInvesting("XAG_USD", 69, false),
+            syncSpotAsset("XAU_USD", "XAUUSD=X", false),
+            syncSpotAsset("XAG_USD", "XAGUSD=X", false),
             syncSpotAsset("USD_INR", "INR=X", false),
             syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false),
             syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false),
