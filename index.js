@@ -187,7 +187,7 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
                         await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
                     }
                 }
-                console.log(`[HISTORY] Synced ${timestamps.length} historical entries for ${assetName}`);
+                logDebug(`[HISTORY] Synced ${timestamps.length} historical entries for ${assetName}`);
             } else {
                 // Only sync the latest element for the 10-second tick
                 const idx = timestamps.length - 1;
@@ -206,7 +206,7 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
             }
         }
     } catch (e) {
-        console.error(`Error syncing spot asset ${assetName}:`, e.message);
+        logDebug(`Error syncing spot asset ${assetName}: ${e.message}`);
     }
 }
 
@@ -290,7 +290,7 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
                         await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
                     }
                 }
-                console.log(`[HISTORY] Synced ${tvcData.t.length} historical entries for ${assetName}`);
+                logDebug(`[HISTORY] Synced ${tvcData.t.length} historical entries for ${assetName}`);
             } else {
                 const dateStr = getIstDateString();
                 const idx = tvcData.t.length - 1;
@@ -308,7 +308,7 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
             }
         }
     } catch (e) {
-        console.error(`Error syncing MCX asset ${assetName}:`, e.message);
+        logDebug(`Error syncing MCX asset ${assetName}: ${e.message}`);
     }
 }
 
@@ -345,7 +345,7 @@ async function syncHarikalaGst() {
             }
         }
     } catch (e) {
-        console.error("Error syncing Harikala GST price:", e.message);
+        logDebug(`Error syncing Harikala GST price: ${e.message}`);
     }
 }
 
@@ -353,13 +353,13 @@ let lastHistoricalSyncTime = 0;
 
 // Main sync scheduling loop
 async function runSyncCycle() {
-    console.log(`[SYNC CYCLE START] ${new Date().toISOString()}`);
+    logDebug(`[SYNC CYCLE START]`);
     
     const now = Date.now();
     const shouldSyncHistory = (now - lastHistoricalSyncTime > 12 * 60 * 60 * 1000); // every 12 hours
     
     if (shouldSyncHistory) {
-        console.log("[HISTORICAL SYNC START]");
+        logDebug("[HISTORICAL SYNC START]");
         lastHistoricalSyncTime = now;
         
         // Run historical backfills in parallel to save startup time
@@ -372,9 +372,9 @@ async function runSyncCycle() {
                 syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
             ]);
         } catch (err) {
-            console.error("Error in parallel historical sync:", err.message);
+            logDebug(`Error in parallel historical sync: ${err.message}`);
         }
-        console.log("[HISTORICAL SYNC END]");
+        logDebug("[HISTORICAL SYNC END]");
     }
 
     // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
@@ -388,10 +388,10 @@ async function runSyncCycle() {
             syncHarikalaGst()
         ]);
     } catch (err) {
-        console.error("Error in parallel live sync:", err.message);
+        logDebug(`Error in parallel live sync: ${err.message}`);
     }
 
-    console.log(`[SYNC CYCLE END]`);
+    logDebug(`[SYNC CYCLE END]`);
 }
 
 // Start HTTP server for Render health checks and secure API proxy endpoints
