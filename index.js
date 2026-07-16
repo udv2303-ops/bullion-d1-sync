@@ -497,8 +497,23 @@ http.createServer(async (req, res) => {
     console.log(`API proxy server is listening on port ${PORT}`);
 });
 
-// Run every 10 seconds
-setInterval(runSyncCycle, 10000);
+// Create database indexes on launch to optimize queries
+async function initDatabaseIndexes() {
+    try {
+        logDebug("Initializing D1 Database indexes...");
+        await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
+        await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
+        logDebug("D1 Database indexes initialized successfully.");
+    } catch (e) {
+        logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
+    }
+}
 
 // Run immediately on launch
-runSyncCycle();
+(async () => {
+    await initDatabaseIndexes();
+    runSyncCycle();
+})();
+
+// Run every 10 seconds
+setInterval(runSyncCycle, 10000);
