@@ -2,6 +2,7 @@ const http = require('http');
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const https = require('https');
 const urlModule = require('url');
+const { exec } = require('child_process');
 
 // Cloudflare Credentials (loaded from Environment Variables for security)
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -73,48 +74,25 @@ function queryD1(sql, params = []) {
     });
 }
 
-// Fetch helper with HTTP Redirect Following
-function fetchUrl(url, headers = {}, redirectsLimit = 5) {
+// Fetch helper using curl to avoid TLS fingerprint blocks (e.g. Cloudflare)
+function fetchUrl(url, headers = {}) {
     return new Promise((resolve, reject) => {
-        if (redirectsLimit < 0) {
-            reject(new Error("Too many redirects"));
-            return;
-        }
-
-        const parsedUrl = urlModule.parse(url);
-        const options = {
-            hostname: parsedUrl.hostname,
-            path: parsedUrl.path,
-            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-            method: 'GET',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                ...headers
-            }
+        let headersStr = '';
+        const mergedHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            ...headers
         };
-
-        const protocol = parsedUrl.protocol === 'https:' ? https : http;
-        
-        const req = protocol.request(options, (res) => {
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                const redirectUrl = urlModule.resolve(url, res.headers.location);
-                resolve(fetchUrl(redirectUrl, headers, redirectsLimit - 1));
-                return;
+        for (const [key, val] of Object.entries(mergedHeaders)) {
+            headersStr += ` -H "${key}: ${val}"`;
+        }
+        const cmd = `curl -s -L -k --ssl-no-revoke${headersStr} "${url}"`;
+        exec(cmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+            if (error) {
+                reject(error);
+            } else {
+                resolve(stdout);
             }
-
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                if (res.statusCode >= 200 && res.statusCode < 300) {
-                    resolve(body);
-                } else {
-                    reject(new Error(`HTTP ${res.statusCode} from ${url}`));
-                }
-            });
         });
-
-        req.on('error', reject);
-        req.end();
     });
 }
 
@@ -229,6 +207,58 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
         }
     } catch (e) {
         console.error(`Error syncing spot asset ${assetName}:`, e.message);
+    }
+}
+
+// 1b. Sync Spot Assets (Gold, Silver) via Investing.com TVC API
+async function syncSpotAssetInvesting(assetName, symbolId, syncHistory = false) {
+    try {
+        const toTimestamp = Math.floor(Date.now() / 1000);
+        const daysBack = syncHistory ? 30 : 5;
+        const fromTimestamp = toTimestamp - daysBack * 24 * 3600;
+        
+        const carrierUuid = '39a674ee5d5d4dbda6fb886f6a782bb8';
+        const url = `https://tvc6.investing.com/${carrierUuid}/0/0/0/0/history?symbol=${symbolId}&resolution=D&from=${fromTimestamp}&to=${toTimestamp}`;
+        
+        const raw = await fetchUrl(url, {
+            'Referer': 'https://tvc-invdn-com.investing.com/'
+        });
+        const tvcData = JSON.parse(raw);
+        
+        if (tvcData.s === "ok" && tvcData.t && tvcData.o) {
+            if (syncHistory) {
+                for (let i = 0; i < tvcData.t.length; i++) {
+                    const openVal = toDoubleSafe(tvcData.o[i]);
+                    const closeVal = toDoubleSafe(tvcData.c[i]);
+                    const highVal = toDoubleSafe(tvcData.h[i]) || closeVal;
+                    const lowVal = toDoubleSafe(tvcData.l[i]) || closeVal;
+                    
+                    if (closeVal > 0.0) {
+                        const date = new Date(tvcData.t[i] * 1000);
+                        const istTime = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+                        const dateStr = istTime.toISOString().split('T')[0];
+                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                    }
+                }
+                console.log(`[HISTORY-INVESTING] Synced ${tvcData.t.length} entries for ${assetName}`);
+            } else {
+                const dateStr = getIstDateString();
+                const idx = tvcData.t.length - 1;
+                if (idx >= 0) {
+                    const openVal = toDoubleSafe(tvcData.o[idx]);
+                    const closeVal = toDoubleSafe(tvcData.c[idx]);
+                    const highVal = toDoubleSafe(tvcData.h[idx]) || closeVal;
+                    const lowVal = toDoubleSafe(tvcData.l[idx]) || closeVal;
+                    
+                    if (closeVal > 0.0) {
+                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        await saveIntradayTick(assetName, closeVal);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.error(`Error syncing spot asset ${assetName} from Investing.com:`, e.message);
     }
 }
 
@@ -387,8 +417,8 @@ async function runSyncCycle() {
         // Run historical backfills in parallel to save startup time
         try {
             await Promise.all([
-                syncSpotAsset("XAU_USD", "XAUUSD=X", true),
-                syncSpotAsset("XAG_USD", "XAGUSD=X", true),
+                syncSpotAssetInvesting("XAU_USD", 68, true),
+                syncSpotAssetInvesting("XAG_USD", 69, true),
                 syncSpotAsset("USD_INR", "INR=X", true),
                 syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true),
                 syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
@@ -402,8 +432,8 @@ async function runSyncCycle() {
     // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
     try {
         await Promise.all([
-            syncSpotAsset("XAU_USD", "XAUUSD=X", false),
-            syncSpotAsset("XAG_USD", "XAGUSD=X", false),
+            syncSpotAssetInvesting("XAU_USD", 68, false),
+            syncSpotAssetInvesting("XAG_USD", 69, false),
             syncSpotAsset("USD_INR", "INR=X", false),
             syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false),
             syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false),
