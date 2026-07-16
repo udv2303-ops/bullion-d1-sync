@@ -369,28 +369,34 @@ async function runSyncCycle() {
         console.log("[HISTORICAL SYNC START]");
         lastHistoricalSyncTime = now;
         
-        // Spot Assets Historical (30 days range)
-        await syncSpotAsset("XAU_USD", "GC=F", true);
-        await syncSpotAsset("XAG_USD", "SI=F", true);
-        await syncSpotAsset("USD_INR", "INR=X", true);
-
-        // MCX Assets Historical (30 days range)
-        await syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true);
-        await syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true);
+        // Run historical backfills in parallel to save startup time
+        try {
+            await Promise.all([
+                syncSpotAsset("XAU_USD", "GC=F", true),
+                syncSpotAsset("XAG_USD", "SI=F", true),
+                syncSpotAsset("USD_INR", "INR=X", true),
+                syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true),
+                syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
+            ]);
+        } catch (err) {
+            console.error("Error in parallel historical sync:", err.message);
+        }
         console.log("[HISTORICAL SYNC END]");
     }
 
-    // Spot Assets Live (10s interval, updates latest quote and tick)
-    await syncSpotAsset("XAU_USD", "GC=F", false);
-    await syncSpotAsset("XAG_USD", "SI=F", false);
-    await syncSpotAsset("USD_INR", "INR=X", false);
-
-    // MCX Assets Live (10s interval, updates latest quote and tick)
-    await syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false);
-    await syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false);
-
-    // Harikala GST
-    await syncHarikalaGst();
+    // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
+    try {
+        await Promise.all([
+            syncSpotAsset("XAU_USD", "GC=F", false),
+            syncSpotAsset("XAG_USD", "SI=F", false),
+            syncSpotAsset("USD_INR", "INR=X", false),
+            syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false),
+            syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false),
+            syncHarikalaGst()
+        ]);
+    } catch (err) {
+        console.error("Error in parallel live sync:", err.message);
+    }
 
     console.log(`[SYNC CYCLE END]`);
 }
