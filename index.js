@@ -161,7 +161,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
 // 1. Sync Spot Assets (Gold, Silver, USD_INR) via Yahoo Finance API (COMEX GC=F, SI=F, INR=X)
 async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
     try {
-        const range = syncHistory ? "30d" : "5d";
+        const range = syncHistory ? "3y" : "5d";
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooTicker}?interval=1d&range=${range}`;
         const raw = await fetchUrl(url);
         const yahooData = JSON.parse(raw);
@@ -267,7 +267,7 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
         }
 
         const toTimestamp = Math.floor(Date.now() / 1000);
-        const daysBack = syncHistory ? 30 : 5;
+        const daysBack = syncHistory ? 1095 : 5;
         const fromTimestamp = toTimestamp - daysBack * 24 * 3600;
 
         const sym = `${symbolPrefix}_${expiryDate}_MCX`;
