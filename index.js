@@ -127,17 +127,49 @@ function isUsDst(date) {
     return date >= marchSunday && date < novSunday;
 }
 
-// Get shifted date string for spot gold/silver based on US DST (2:30 AM/3:30 AM IST transition)
-function getSpotAssetDateString() {
-    const d = new Date();
-    const istTimeMs = d.getTime() + (5.5 * 60 * 60 * 1000);
+// Get date string for an asset based on US DST (for Spot assets) or normal IST (for others)
+function getAssetDateStringForTimestamp(asset, timestampMs) {
+    const istTimeMs = timestampMs + (5.5 * 60 * 60 * 1000);
     const istDate = new Date(istTimeMs);
     
-    const dst = isUsDst(istDate);
-    const shiftMinutes = dst ? (2 * 60 + 30) : (3 * 60 + 30); // 2:30 AM or 3:30 AM IST
+    if (asset === "XAU_USD" || asset === "XAG_USD") {
+        const dst = isUsDst(istDate);
+        const shiftMinutes = dst ? (2 * 60 + 30) : (3 * 60 + 30); // 2:30 AM or 3:30 AM IST
+        const shiftedDate = new Date(istTimeMs - shiftMinutes * 60 * 1000);
+        return shiftedDate.toISOString().split('T')[0];
+    } else {
+        return istDate.toISOString().split('T')[0];
+    }
+}
+
+// Get shifted date string for spot gold/silver based on US DST (2:30 AM/3:30 AM IST transition)
+function getSpotAssetDateString() {
+    return getAssetDateStringForTimestamp("XAU_USD", Date.now());
+}
+
+// Calculate start and end millisecond timestamps for a given YYYY-MM-DD date and asset (DST aware)
+function getTimestampRangeForDate(asset, dateStr) {
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return null;
+    const year = parseInt(parts[0]);
+    const month = parseInt(parts[1]) - 1;
+    const day = parseInt(parts[2]);
     
-    const shiftedDate = new Date(istTimeMs - shiftMinutes * 60 * 1000);
-    return shiftedDate.toISOString().split('T')[0];
+    const baseDateIst = new Date(Date.UTC(year, month, day, 0, 0, 0));
+    const midnightIstMs = baseDateIst.getTime() - 5.5 * 60 * 60 * 1000;
+    
+    let startMs = midnightIstMs;
+    let endMs = midnightIstMs + 24 * 60 * 60 * 1000 - 1;
+    
+    if (asset === "XAU_USD" || asset === "XAG_USD") {
+        const dateForDst = new Date(midnightIstMs + 5.5 * 60 * 60 * 1000);
+        const dst = isUsDst(dateForDst);
+        const shiftMs = dst ? (2.5 * 60 * 60 * 1000) : (3.5 * 60 * 60 * 1000);
+        startMs += shiftMs;
+        endMs += shiftMs;
+    }
+    
+    return { startMs, endMs };
 }
 
 async function saveIntradayTick(asset, price) {
@@ -490,20 +522,37 @@ http.createServer(async (req, res) => {
         else if (path === '/api/logged-dates') {
             const asset = query.asset;
             const dbRes = await queryD1(
-                "SELECT DISTINCT date((timestamp + 19800000)/1000, 'unixepoch') as date FROM intraday_prices WHERE asset = ? ORDER BY date DESC",
+                "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts FROM intraday_prices WHERE asset = ?",
                 [asset]
             );
             const results = dbRes.result?.[0]?.results || [];
-            const datesList = results.map(r => r.date);
+            const row = results[0];
+            const datesList = [];
+            
+            if (row && row.min_ts !== null && row.max_ts !== null) {
+                const seen = new Set();
+                for (let ts = row.min_ts; ts <= row.max_ts; ts += 3600 * 1000) {
+                    seen.add(getAssetDateStringForTimestamp(asset, ts));
+                }
+                seen.add(getAssetDateStringForTimestamp(asset, row.max_ts));
+                datesList.push(...Array.from(seen).sort().reverse());
+            }
+            
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(datesList));
         }
         else if (path === '/api/ticks') {
             const asset = query.asset;
             const date = query.date; // YYYY-MM-DD
+            const range = getTimestampRangeForDate(asset, date);
+            if (!range) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: "Invalid date format" }));
+                return;
+            }
             const dbRes = await queryD1(
-                "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND date((timestamp + 19800000)/1000, 'unixepoch') = ? ORDER BY timestamp DESC",
-                [asset, date]
+                "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                [asset, range.startMs, range.endMs]
             );
             const results = dbRes.result?.[0]?.results || [];
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -516,8 +565,12 @@ http.createServer(async (req, res) => {
                 "DELETE FROM prices WHERE date < ?",
                 [todayStr]
             );
+            
+            // Delete ticks older than 2 days (172,800,000 ms) to keep today's and yesterday's logs available in the app.
+            const twoDaysAgoMs = Date.now() - 2 * 24 * 60 * 60 * 1000;
             const delTicks = await queryD1(
-                "DELETE FROM intraday_prices WHERE timestamp < 1784208300000"
+                "DELETE FROM intraday_prices WHERE timestamp < ?",
+                [twoDaysAgoMs]
             );
             
             res.writeHead(200, { 'Content-Type': 'application/json' });
