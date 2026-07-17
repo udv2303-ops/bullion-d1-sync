@@ -566,19 +566,12 @@ http.createServer(async (req, res) => {
                 [todayStr]
             );
             
-            // Delete ticks older than 2 days (172,800,000 ms) to keep today's and yesterday's logs available in the app.
-            const twoDaysAgoMs = Date.now() - 2 * 24 * 60 * 60 * 1000;
-            const delTicks = await queryD1(
-                "DELETE FROM intraday_prices WHERE timestamp < ?",
-                [twoDaysAgoMs]
-            );
-            
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 success: true, 
-                message: "All previous days' historical summaries deleted successfully. Only today's live data is kept.", 
+                message: "All previous days' historical summaries deleted successfully. Only today's live data is kept. Live ticks are preserved.", 
                 delPricesResult: delPrices, 
-                delTicksResult: delTicks 
+                delTicksResult: { message: "Tick deletion is disabled. All live logs are kept forever." }
             }));
         }
         else if (path === '/api/debug-logs') {
