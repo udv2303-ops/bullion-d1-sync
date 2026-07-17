@@ -390,32 +390,9 @@ async function syncHarikalaBroadcast() {
     }
 }
 
-let lastHistoricalSyncTime = 0;
-
 // Main sync scheduling loop
 async function runSyncCycle() {
     logDebug(`[SYNC CYCLE START]`);
-    
-    const now = Date.now();
-    const shouldSyncHistory = (now - lastHistoricalSyncTime > 12 * 60 * 60 * 1000); // every 12 hours
-    
-    if (shouldSyncHistory) {
-        logDebug("[HISTORICAL SYNC START]");
-        lastHistoricalSyncTime = now;
-        
-        // Run historical backfills in parallel to save startup time
-        try {
-            await Promise.all([
-                syncSpotAsset("XAU_USD", "GC=F", true),
-                syncSpotAsset("XAG_USD", "SI=F", true),
-                syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", true),
-                syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", true)
-            ]);
-        } catch (err) {
-            logDebug(`Error in parallel historical sync: ${err.message}`);
-        }
-        logDebug("[HISTORICAL SYNC END]");
-    }
 
     // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
     try {
@@ -491,24 +468,20 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify(results));
         }
         else if (path === '/api/clean-old-data') {
-            logDebug("[MAINTENANCE] Cleaning all historical and daily summaries to recreate fresh...");
+            logDebug("[MAINTENANCE] Cleaning all historical summaries before today...");
+            const todayStr = getIstDateString();
             const delPrices = await queryD1(
-                "DELETE FROM prices"
+                "DELETE FROM prices WHERE date < ?",
+                [todayStr]
             );
             const delTicks = await queryD1(
                 "DELETE FROM intraday_prices WHERE timestamp < 1784208300000"
             );
             
-            // Reset historical tracker and trigger clean 3y backfill in background
-            lastHistoricalSyncTime = 0;
-            setTimeout(() => {
-                runSyncCycle().catch(err => logDebug(`[HISTORY REFILL ERROR] ${err.message}`));
-            }, 1000);
-            
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 success: true, 
-                message: "All daily and historical summaries deleted. Fresh 3-year history backfill triggered in the background.", 
+                message: "All previous days' historical summaries deleted successfully. Only today's live data is kept.", 
                 delPricesResult: delPrices, 
                 delTicksResult: delTicks 
             }));
