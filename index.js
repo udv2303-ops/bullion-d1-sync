@@ -199,14 +199,11 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
                 // Only sync the latest element for the 10-second tick
                 const idx = timestamps.length - 1;
                 if (idx >= 0) {
-                    const openVal = toDoubleSafe(quote.open[idx]);
                     const closeVal = toDoubleSafe(quote.close[idx]);
-                    const highVal = toDoubleSafe(quote.high[idx]) || closeVal;
-                    const lowVal = toDoubleSafe(quote.low[idx]) || closeVal;
                     
                     if (closeVal > 0.0) {
                         const dateStr = getIstDateString();
-                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        await saveDailySummary(assetName, dateStr, closeVal, closeVal, closeVal, closeVal);
                         await saveIntradayTick(assetName, closeVal);
                     }
                 }
@@ -312,13 +309,10 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
                 const dateStr = getIstDateString();
                 const idx = tvcData.t.length - 1;
                 if (idx >= 0) {
-                    const openVal = toDoubleSafe(tvcData.o[idx]);
                     const closeVal = toDoubleSafe(tvcData.c[idx]);
-                    const highVal = toDoubleSafe(tvcData.h[idx]) || closeVal;
-                    const lowVal = toDoubleSafe(tvcData.l[idx]) || closeVal;
 
                     if (closeVal > 0.0) {
-                        await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        await saveDailySummary(assetName, dateStr, closeVal, closeVal, closeVal, closeVal);
                         await saveIntradayTick(assetName, closeVal);
                     }
                 }
@@ -354,13 +348,13 @@ async function syncHarikalaBroadcast() {
             
             if (name === "GOLD") {
                 // Spot Gold
-                await saveDailySummary("XAU_USD", dateStr, bidVal, highVal, lowVal, closeVal);
+                await saveDailySummary("XAU_USD", dateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAU_USD", closeVal);
                 logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal}`);
             }
             else if (name === "SILVER") {
                 // Spot Silver
-                await saveDailySummary("XAG_USD", dateStr, bidVal, highVal, lowVal, closeVal);
+                await saveDailySummary("XAG_USD", dateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAG_USD", closeVal);
                 logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal}`);
             }
@@ -376,7 +370,7 @@ async function syncHarikalaBroadcast() {
                 const endMinutes = 23 * 60 + 50;
                 
                 if (minutesSinceMidnight >= startMinutes && minutesSinceMidnight <= endMinutes) {
-                    await saveDailySummary("GOLD_999_GST", dateStr, bidVal, highVal, lowVal, closeVal);
+                    await saveDailySummary("GOLD_999_GST", dateStr, closeVal, closeVal, closeVal, closeVal);
                     await saveIntradayTick("GOLD_999_GST", closeVal);
                     logDebug(`[HARIKALA-SPOT] Synced GOLD_999_GST: ${closeVal}`);
                 }
