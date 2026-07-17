@@ -488,10 +488,10 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify(results));
         }
         else if (path === '/api/clean-old-data') {
-            logDebug("[MAINTENANCE] Cleaning today's spot gold/silver summaries to recreate fresh...");
+            logDebug("[MAINTENANCE] Cleaning today's daily summaries for all assets to recreate fresh...");
             const todayStr = getIstDateString();
             const delPrices = await queryD1(
-                "DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND date = ?",
+                "DELETE FROM prices WHERE date = ?",
                 [todayStr]
             );
             const delTicks = await queryD1(
@@ -500,7 +500,7 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 success: true, 
-                message: "Today's bad daily summaries deleted. Live sync will recreate them with correct high/low in 10s.", 
+                message: "Today's daily summaries for all assets deleted. Live sync will recreate them with correct high/low in 10s.", 
                 delPricesResult: delPrices, 
                 delTicksResult: delTicks 
             }));
