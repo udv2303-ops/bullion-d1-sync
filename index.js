@@ -301,10 +301,19 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
                         }
                         
                         await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        
+                        // Dynamically generate and sync GST Gold history from MCX Gold history
+                        if (assetName === "GOLD_MCX") {
+                            await saveDailySummary("GOLD_999_GST", dateStr, openVal * 1.0354, highVal * 1.0354, lowVal * 1.0354, closeVal * 1.0354);
+                        }
+                        
                         syncCount++;
                     }
                 }
                 logDebug(`[HISTORY] Synced ${syncCount} historical entries for ${assetName}`);
+                if (assetName === "GOLD_MCX") {
+                    logDebug(`[HISTORY] Dynamically generated ${syncCount} historical entries for GOLD_999_GST`);
+                }
             } else {
                 const dateStr = getIstDateString();
                 const idx = tvcData.t.length - 1;
@@ -482,19 +491,24 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify(results));
         }
         else if (path === '/api/clean-old-data') {
-            logDebug("[MAINTENANCE] Cleaning today's daily summaries for all assets to recreate fresh...");
-            const todayStr = getIstDateString();
+            logDebug("[MAINTENANCE] Cleaning all historical and daily summaries to recreate fresh...");
             const delPrices = await queryD1(
-                "DELETE FROM prices WHERE date = ?",
-                [todayStr]
+                "DELETE FROM prices"
             );
             const delTicks = await queryD1(
-                "DELETE FROM intraday_prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND timestamp < 1784208300000"
+                "DELETE FROM intraday_prices WHERE timestamp < 1784208300000"
             );
+            
+            // Reset historical tracker and trigger clean 3y backfill in background
+            lastHistoricalSyncTime = 0;
+            setTimeout(() => {
+                runSyncCycle().catch(err => logDebug(`[HISTORY REFILL ERROR] ${err.message}`));
+            }, 1000);
+            
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 success: true, 
-                message: "Today's daily summaries for all assets deleted. Live sync will recreate them with correct high/low in 10s.", 
+                message: "All daily and historical summaries deleted. Fresh 3-year history backfill triggered in the background.", 
                 delPricesResult: delPrices, 
                 delTicksResult: delTicks 
             }));
