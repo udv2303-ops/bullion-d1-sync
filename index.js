@@ -488,9 +488,11 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify(results));
         }
         else if (path === '/api/clean-old-data') {
-            logDebug("[MAINTENANCE] Cleaning old spot gold/silver history...");
+            logDebug("[MAINTENANCE] Cleaning today's spot gold/silver summaries to recreate fresh...");
+            const todayStr = getIstDateString();
             const delPrices = await queryD1(
-                "DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND date < '2026-07-16'"
+                "DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND date = ?",
+                [todayStr]
             );
             const delTicks = await queryD1(
                 "DELETE FROM intraday_prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND timestamp < 1784208300000"
@@ -498,7 +500,7 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ 
                 success: true, 
-                message: "Old spot gold/silver history deleted successfully.", 
+                message: "Today's bad daily summaries deleted. Live sync will recreate them with correct high/low in 10s.", 
                 delPricesResult: delPrices, 
                 delTicksResult: delTicks 
             }));
