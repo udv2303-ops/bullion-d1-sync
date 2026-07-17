@@ -401,6 +401,18 @@ async function syncHarikalaBroadcast() {
                 await saveIntradayTick("XAG_USD", closeVal);
                 logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
             }
+            else if (name === "GOLD FUTURE") {
+                // MCX Gold Future
+                await saveDailySummary("GOLD_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
+                await saveIntradayTick("GOLD_MCX", closeVal);
+                logDebug(`[HARIKALA-MCX] Synced GOLD_MCX: ${closeVal}`);
+            }
+            else if (name === "SILVER FUTURE") {
+                // MCX Silver Future
+                await saveDailySummary("SILVER_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
+                await saveIntradayTick("SILVER_MCX", closeVal);
+                logDebug(`[HARIKALA-MCX] Synced SILVER_MCX: ${closeVal}`);
+            }
             else if (name === "GOLD 999 IMP WITH GST (Today)") {
                 // GST Gold (Only during active trading hours: 09:00 AM - 11:50 PM IST)
                 const d = new Date();
@@ -428,15 +440,11 @@ async function syncHarikalaBroadcast() {
 async function runSyncCycle() {
     logDebug(`[SYNC CYCLE START]`);
 
-    // Run all live sync queries in parallel (reduces wait time from 5s+ to ~1s)
+    // Run all live sync queries
     try {
-        await Promise.all([
-            syncHarikalaBroadcast(),
-            syncMcxAsset("GOLD_MCX", "https://www.moneycontrol.com/commodity/gold-price.html", "GOLD", false),
-            syncMcxAsset("SILVER_MCX", "https://www.moneycontrol.com/commodity/silver-price.html", "SILVER", false)
-        ]);
+        await syncHarikalaBroadcast();
     } catch (err) {
-        logDebug(`Error in parallel live sync: ${err.message}`);
+        logDebug(`Error in live sync: ${err.message}`);
     }
 
     logDebug(`[SYNC CYCLE END]`);
