@@ -173,6 +173,8 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
             
             if (syncHistory) {
                 // Loop through all historical data points to fill in D1 database
+                const todayStr = getIstDateString();
+                let syncCount = 0;
                 for (let i = 0; i < timestamps.length; i++) {
                     const openVal = toDoubleSafe(quote.open[i]);
                     const closeVal = toDoubleSafe(quote.close[i]);
@@ -183,10 +185,16 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
                         const date = new Date(timestamps[i] * 1000);
                         const istTime = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
                         const dateStr = istTime.toISOString().split('T')[0];
+                        
+                        if (dateStr === todayStr) {
+                            continue;
+                        }
+                        
                         await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        syncCount++;
                     }
                 }
-                logDebug(`[HISTORY] Synced ${timestamps.length} historical entries for ${assetName}`);
+                logDebug(`[HISTORY] Synced ${syncCount} historical entries for ${assetName}`);
             } else {
                 // Only sync the latest element for the 10-second tick
                 const idx = timestamps.length - 1;
@@ -278,6 +286,8 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
         if (tvcData.s === "ok" && tvcData.t && tvcData.o) {
             if (syncHistory) {
                 // Loop through all historical data points to fill in D1 database
+                const todayStr = getIstDateString();
+                let syncCount = 0;
                 for (let i = 0; i < tvcData.t.length; i++) {
                     const openVal = toDoubleSafe(tvcData.o[i]);
                     const closeVal = toDoubleSafe(tvcData.c[i]);
@@ -288,10 +298,16 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
                         const date = new Date(tvcData.t[i] * 1000);
                         const istTime = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
                         const dateStr = istTime.toISOString().split('T')[0];
+                        
+                        if (dateStr === todayStr) {
+                            continue;
+                        }
+                        
                         await saveDailySummary(assetName, dateStr, openVal, highVal, lowVal, closeVal);
+                        syncCount++;
                     }
                 }
-                logDebug(`[HISTORY] Synced ${tvcData.t.length} historical entries for ${assetName}`);
+                logDebug(`[HISTORY] Synced ${syncCount} historical entries for ${assetName}`);
             } else {
                 const dateStr = getIstDateString();
                 const idx = tvcData.t.length - 1;
