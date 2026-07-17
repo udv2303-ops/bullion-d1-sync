@@ -108,6 +108,38 @@ function getIstDateString() {
     return istTime.toISOString().split('T')[0];
 }
 
+// Check if a date is in US Daylight Saving Time (DST)
+function isUsDst(date) {
+    const year = date.getFullYear();
+    
+    // US DST starts on the second Sunday of March
+    let marchSunday = new Date(year, 2, 8); // March 8th
+    while (marchSunday.getDay() !== 0) {
+        marchSunday.setDate(marchSunday.getDate() + 1);
+    }
+    
+    // US DST ends on the first Sunday of November
+    let novSunday = new Date(year, 10, 1); // November 1st
+    while (novSunday.getDay() !== 0) {
+        novSunday.setDate(novSunday.getDate() + 1);
+    }
+    
+    return date >= marchSunday && date < novSunday;
+}
+
+// Get shifted date string for spot gold/silver based on US DST (2:30 AM/3:30 AM IST transition)
+function getSpotAssetDateString() {
+    const d = new Date();
+    const istTimeMs = d.getTime() + (5.5 * 60 * 60 * 1000);
+    const istDate = new Date(istTimeMs);
+    
+    const dst = isUsDst(istDate);
+    const shiftMinutes = dst ? (2 * 60 + 30) : (3 * 60 + 30); // 2:30 AM or 3:30 AM IST
+    
+    const shiftedDate = new Date(istTimeMs - shiftMinutes * 60 * 1000);
+    return shiftedDate.toISOString().split('T')[0];
+}
+
 async function saveIntradayTick(asset, price) {
     const currentPrice = toDoubleSafe(price);
     if (currentPrice <= 0.0) return;
@@ -357,15 +389,17 @@ async function syncHarikalaBroadcast() {
             
             if (name === "GOLD") {
                 // Spot Gold
-                await saveDailySummary("XAU_USD", dateStr, closeVal, closeVal, closeVal, closeVal);
+                const spotDateStr = getSpotAssetDateString();
+                await saveDailySummary("XAU_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAU_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal}`);
+                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} with date ${spotDateStr}`);
             }
             else if (name === "SILVER") {
                 // Spot Silver
-                await saveDailySummary("XAG_USD", dateStr, closeVal, closeVal, closeVal, closeVal);
+                const spotDateStr = getSpotAssetDateString();
+                await saveDailySummary("XAG_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAG_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal}`);
+                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
             }
             else if (name === "GOLD 999 IMP WITH GST (Today)") {
                 // GST Gold (Only during active trading hours: 09:00 AM - 11:50 PM IST)
