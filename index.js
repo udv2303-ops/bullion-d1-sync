@@ -587,8 +587,8 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
         }
-        else if (path === '/api/economic-calendar') {
-            const finnhubKey = process.env.FINNHUB_API_KEY || query.apikey;
+        else if (path && path.startsWith('/api/economic-calendar')) {
+            const finnhubKey = process.env.FINNHUB_API_KEY || query.apikey || 'd9ie37hr01ql3fe1drpgd9ie37hr01ql3fe1drq0';
             
             if (finnhubKey) {
                 try {
