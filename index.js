@@ -190,6 +190,7 @@ function fetchMoneycontrolEvents() {
                             }
                         }
                     }
+                    logDebug(`[MONEYCONTROL] Successfully parsed ${events.length} live market economic calendar events.`);
                     resolve(events);
                 } catch(e) {
                     logDebug(`Moneycontrol Calendar Scrape Error: ${e.message}`);
