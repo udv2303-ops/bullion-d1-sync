@@ -618,15 +618,33 @@ http.createServer(async (req, res) => {
                 }
             }
             
-            // Clean fallback economic calendar events relevant for Gold/Silver bullion traders
+            // Clean fallback economic calendar events relevant for Gold/Silver bullion traders covering Yesterday, Today, Tomorrow, This Week, Next Week
             const defaultEvents = [
-                { id: "1", country: "US", event: "US Federal Interest Rate Decision (FOMC)", impact: "high", time: "2026-07-29 23:30:00", actual: "5.25%", forecast: "5.25%", previous: "5.50%" },
-                { id: "2", country: "US", event: "US Core CPI Inflation Rate (MoM/YoY)", impact: "high", time: "2026-07-28 18:00:00", actual: "3.1%", forecast: "3.2%", previous: "3.3%" },
-                { id: "3", country: "US", event: "Non-Farm Payrolls (NFP Employment)", impact: "high", time: "2026-07-31 18:00:00", actual: "185K", forecast: "190K", previous: "206K" },
-                { id: "4", country: "IN", event: "India RBI Monetary Policy Committee Rate", impact: "high", time: "2026-08-06 10:00:00", actual: "6.50%", forecast: "6.50%", previous: "6.50%" },
-                { id: "5", country: "US", event: "US Retail Sales (MoM)", impact: "medium", time: "2026-07-27 18:00:00", actual: "0.4%", forecast: "0.3%", previous: "0.1%" },
-                { id: "6", country: "US", event: "Initial Jobless Claims", impact: "medium", time: "2026-07-30 18:00:00", actual: "222K", forecast: "225K", previous: "229K" },
-                { id: "7", country: "IN", event: "India Inflation Rate (YoY)", impact: "medium", time: "2026-08-12 17:30:00", actual: "5.08%", forecast: "5.10%", previous: "4.75%" }
+                // YESTERDAY (2026-07-24)
+                { id: "y1", country: "US", event: "US S&P Global Manufacturing PMI", impact: "high", time: "2026-07-24 19:15:00", actual: "49.5", forecast: "51.7", previous: "51.6" },
+                { id: "y2", country: "EU", event: "ECB Main Refinancing Interest Rate", impact: "high", time: "2026-07-24 17:45:00", actual: "4.25%", forecast: "4.25%", previous: "4.50%" },
+                { id: "y3", country: "JP", event: "Japan National Core CPI (YoY)", impact: "medium", time: "2026-07-24 05:00:00", actual: "2.6%", forecast: "2.7%", previous: "2.5%" },
+
+                // TODAY (2026-07-25)
+                { id: "t1", country: "US", event: "US Durable Goods Orders (MoM)", impact: "high", time: "2026-07-25 18:00:00", actual: "-6.6%", forecast: "0.3%", previous: "0.1%" },
+                { id: "t2", country: "IN", event: "India Forex Reserves (USD)", impact: "medium", time: "2026-07-25 17:00:00", actual: "$666.8B", forecast: "$665.0B", previous: "$664.0B" },
+                { id: "t3", country: "US", event: "US Michigan Consumer Sentiment Index", impact: "medium", time: "2026-07-25 19:30:00", actual: "66.4", forecast: "66.0", previous: "66.0" },
+
+                // TOMORROW (2026-07-26)
+                { id: "tm1", country: "CN", event: "China PBoC Loan Prime Rate 1-Year", impact: "high", time: "2026-07-26 06:45:00", actual: "-", forecast: "3.35%", previous: "3.45%" },
+                { id: "tm2", country: "US", event: "US Baker Hughes Total Rig Count", impact: "low", time: "2026-07-26 22:30:00", actual: "-", forecast: "585", previous: "584" },
+
+                // THIS WEEK (2026-07-20 to 2026-07-26)
+                { id: "tw1", country: "US", event: "US Existing Home Sales (MoM)", impact: "medium", time: "2026-07-23 19:30:00", actual: "3.89M", forecast: "3.99M", previous: "4.11M" },
+                { id: "tw2", country: "US", event: "US Crude Oil Inventories (EIA)", impact: "medium", time: "2026-07-24 20:00:00", actual: "-3.74M", forecast: "-1.60M", previous: "-4.87M" },
+
+                // NEXT WEEK (2026-07-27 to 2026-08-02)
+                { id: "nw1", country: "US", event: "US Federal Interest Rate Decision (FOMC)", impact: "high", time: "2026-07-29 23:30:00", actual: "-", forecast: "5.25%", previous: "5.50%" },
+                { id: "nw2", country: "US", event: "US Core CPI Inflation Rate (MoM/YoY)", impact: "high", time: "2026-07-28 18:00:00", actual: "-", forecast: "3.2%", previous: "3.3%" },
+                { id: "nw3", country: "US", event: "US Non-Farm Payrolls (NFP Employment)", impact: "high", time: "2026-07-31 18:30:00", actual: "-", forecast: "185K", previous: "206K" },
+                { id: "nw4", country: "IN", event: "India RBI Monetary Policy Committee Rate", impact: "high", time: "2026-08-01 10:00:00", actual: "-", forecast: "6.50%", previous: "6.50%" },
+                { id: "nw5", country: "US", event: "US Initial Jobless Claims", impact: "medium", time: "2026-07-30 18:00:00", actual: "-", forecast: "225K", previous: "229K" },
+                { id: "nw6", country: "US", event: "US Core PCE Price Index (MoM)", impact: "high", time: "2026-07-31 18:00:00", actual: "-", forecast: "0.2%", previous: "0.1%" }
             ];
             
             res.writeHead(200, { 'Content-Type': 'application/json' });
