@@ -100,8 +100,10 @@ function fetchMoneycontrolEvents() {
     return new Promise((resolve) => {
         const req = https.get('https://www.moneycontrol.com/economic-calendar', {
             headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cookie': 'MC_LOCATION=IN; MC_GEO=IN; mc_location=IN'
             }
         }, res => {
             let html = '';
@@ -699,49 +701,13 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify(results));
         }
         else if (path && path.startsWith('/api/economic-calendar')) {
+            let mcEvents = [];
             try {
-                // 1. First try parsing live Moneycontrol Economic Calendar (100% Real Live Market Events)
-                const mcEvents = await fetchMoneycontrolEvents();
-                if (mcEvents && mcEvents.length > 0) {
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify(mcEvents));
-                    return;
-                }
+                mcEvents = await fetchMoneycontrolEvents();
             } catch (err) {
                 logDebug(`Moneycontrol Scrape Error: ${err.message}`);
             }
 
-            const finnhubKey = process.env.FINNHUB_API_KEY || query.apikey || 'd9ie37hr01ql3fe1drpgd9ie37hr01ql3fe1drq0';
-            
-            if (finnhubKey) {
-                try {
-                    const today = new Date();
-                    const fromDate = new Date(today.getTime() - 2 * 86400000).toISOString().split('T')[0];
-                    const toDate = new Date(today.getTime() + 7 * 86400000).toISOString().split('T')[0];
-                    const fhUrl = `https://finnhub.io/api/v1/calendar/economic?from=${fromDate}&to=${toDate}&token=${finnhubKey}`;
-                    const rawData = await fetchUrl(fhUrl);
-                    const fhData = JSON.parse(rawData);
-                    const events = (fhData.economicCalendar || []).map(ev => ({
-                        id: ev.event + "_" + ev.time,
-                        country: ev.country || "US",
-                        event: ev.event,
-                        impact: ev.impact ? ev.impact.toLowerCase() : "medium",
-                        time: ev.time,
-                        actual: ev.actual !== null ? String(ev.actual) : "-",
-                        forecast: ev.estimate !== null ? String(ev.estimate) : "-",
-                        previous: ev.prev !== null ? String(ev.prev) : "-"
-                    }));
-                    if (events.length > 0) {
-                        res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify(events));
-                        return;
-                    }
-                } catch(err) {
-                    logDebug(`Finnhub Economic Calendar Error: ${err.message}`);
-                }
-            }
-            
-            // Clean fallback economic calendar events relevant for Gold/Silver bullion traders covering Yesterday, Today, Tomorrow, This Week, Next Week
             const defaultEvents = [
                 // YESTERDAY (2026-07-24)
                 { id: "y1", country: "US", event: "US S&P Global Manufacturing PMI", impact: "high", time: "2026-07-24 19:15:00", actual: "49.5", forecast: "51.7", previous: "51.6" },
@@ -769,9 +735,10 @@ http.createServer(async (req, res) => {
                 { id: "nw5", country: "US", event: "US Initial Jobless Claims", impact: "medium", time: "2026-07-30 18:00:00", actual: "-", forecast: "225K", previous: "229K" },
                 { id: "nw6", country: "US", event: "US Core PCE Price Index (MoM)", impact: "high", time: "2026-07-31 18:00:00", actual: "-", forecast: "0.2%", previous: "0.1%" }
             ];
-            
+
+            const combinedEvents = mcEvents.length > 0 ? [...mcEvents, ...defaultEvents] : defaultEvents;
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(defaultEvents));
+            res.end(JSON.stringify(combinedEvents));
         }
         else {
             res.writeHead(200, { 'Content-Type': 'text/plain' });
