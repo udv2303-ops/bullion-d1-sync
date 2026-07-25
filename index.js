@@ -609,7 +609,8 @@ http.createServer(async (req, res) => {
     }
 
     const parsedUrl = urlModule.parse(req.url, true);
-    const path = parsedUrl.pathname;
+    const rawPath = parsedUrl.pathname || "";
+    const path = rawPath.endsWith('/') && rawPath.length > 1 ? rawPath.slice(0, -1) : rawPath;
     const query = parsedUrl.query;
 
     try {
