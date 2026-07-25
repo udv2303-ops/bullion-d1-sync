@@ -404,6 +404,14 @@ async function syncHarikalaBroadcast() {
         const lines = raw.split("\n");
         const dateStr = getIstDateString();
         
+        const d = new Date();
+        const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+        const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
+        
+        const startSeconds = 9 * 3600 + 10; // 09:00:10 AM IST
+        const endSeconds = 23 * 3600 + 50 * 60; // 11:50:00 PM IST
+        const isMcxGstMarketOpen = secondsSinceMidnight >= startSeconds && secondsSinceMidnight <= endSeconds;
+        
         for (let line of lines) {
             line = line.trim();
             if (!line) continue;
@@ -434,29 +442,24 @@ async function syncHarikalaBroadcast() {
                 logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
             }
             else if (name === "GOLD FUTURE") {
-                // MCX Gold Future
-                await saveDailySummary("GOLD_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
-                await saveIntradayTick("GOLD_MCX", closeVal);
-                logDebug(`[HARIKALA-MCX] Synced GOLD_MCX: ${closeVal}`);
+                // MCX Gold Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
+                if (isMcxGstMarketOpen) {
+                    await saveDailySummary("GOLD_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
+                    await saveIntradayTick("GOLD_MCX", closeVal);
+                    logDebug(`[HARIKALA-MCX] Synced GOLD_MCX: ${closeVal}`);
+                }
             }
             else if (name === "SILVER FUTURE") {
-                // MCX Silver Future
-                await saveDailySummary("SILVER_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
-                await saveIntradayTick("SILVER_MCX", closeVal);
-                logDebug(`[HARIKALA-MCX] Synced SILVER_MCX: ${closeVal}`);
+                // MCX Silver Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
+                if (isMcxGstMarketOpen) {
+                    await saveDailySummary("SILVER_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
+                    await saveIntradayTick("SILVER_MCX", closeVal);
+                    logDebug(`[HARIKALA-MCX] Synced SILVER_MCX: ${closeVal}`);
+                }
             }
             else if (name === "GOLD 999 IMP WITH GST (Today)") {
-                // GST Gold (Only during active trading hours: 09:00 AM - 11:50 PM IST)
-                const d = new Date();
-                const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
-                const hour = istTime.getUTCHours();
-                const minute = istTime.getUTCMinutes();
-                const minutesSinceMidnight = hour * 60 + minute;
-                
-                const startMinutes = 9 * 60;
-                const endMinutes = 23 * 60 + 50;
-                
-                if (minutesSinceMidnight >= startMinutes && minutesSinceMidnight <= endMinutes) {
+                // GST Gold (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
+                if (isMcxGstMarketOpen) {
                     await saveDailySummary("GOLD_999_GST", dateStr, closeVal, closeVal, closeVal, closeVal);
                     await saveIntradayTick("GOLD_999_GST", closeVal);
                     logDebug(`[HARIKALA-SPOT] Synced GOLD_999_GST: ${closeVal}`);
