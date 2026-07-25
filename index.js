@@ -608,9 +608,11 @@ http.createServer(async (req, res) => {
                         forecast: ev.estimate !== null ? String(ev.estimate) : "-",
                         previous: ev.prev !== null ? String(ev.prev) : "-"
                     }));
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify(events));
-                    return;
+                    if (events.length > 0) {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify(events));
+                        return;
+                    }
                 } catch(err) {
                     logDebug(`Finnhub Economic Calendar Error: ${err.message}`);
                 }
