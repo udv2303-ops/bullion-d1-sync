@@ -96,98 +96,112 @@ function fetchUrl(url, headers = {}) {
 }
 
 // Fetch 100% Real Live Economic Calendar events from Moneycontrol
-async function fetchMoneycontrolEvents() {
-    try {
-        const html = await fetchUrl('https://www.moneycontrol.com/economic-calendar', {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+function fetchMoneycontrolEvents() {
+    return new Promise((resolve) => {
+        const req = https.get('https://www.moneycontrol.com/economic-calendar', {
+            headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+        }, res => {
+            let html = '';
+            res.on('data', c => html += c);
+            res.on('end', () => {
+                try {
+                    const events = [];
+                    const tableRegex = /<table[^>]*class=["'][^"']*multiTables[^"']*["'][^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/table>/gi;
+                    let tableMatch;
+
+                    while ((tableMatch = tableRegex.exec(html)) !== null) {
+                        const tableId = tableMatch[1];
+                        const tableContent = tableMatch[2];
+
+                        let dateStr = "";
+                        const dateParts = tableId.split('-');
+                        if (dateParts.length >= 3) {
+                            const monthDay = dateParts[1];
+                            const year = dateParts[2];
+                            const monthMatch = monthDay.match(/([a-zA-Z]+)(\d+)/);
+                            if (monthMatch) {
+                                const mName = monthMatch[1];
+                                const dayNum = monthMatch[2];
+                                const months = { January:"01", February:"02", March:"03", April:"04", May:"05", June:"06", July:"07", August:"08", September:"09", October:"10", November:"11", December:"12" };
+                                const mCode = months[mName] || "07";
+                                const dCode = dayNum.padStart(2, '0');
+                                dateStr = `${year}-${mCode}-${dCode}`;
+                            }
+                        }
+
+                        const trRegex = /<tr[^>]*class=["'][^"']*tableData[^"']*["'][^>]*>([\s\S]*?)<\/tr>/gi;
+                        let trMatch;
+                        while ((trMatch = trRegex.exec(tableContent)) !== null) {
+                            const trContent = trMatch[1];
+
+                            const impactMatch = trMatch[0].match(/data-impact=["'](\d+)["']/);
+                            let impact = "medium";
+                            if (impactMatch) {
+                                const impVal = parseInt(impactMatch[1]);
+                                if (impVal >= 3) impact = "high";
+                                else if (impVal === 2) impact = "medium";
+                                else impact = "low";
+                            }
+
+                            const ctryMatch = trContent.match(/alt=["']([^"']+)["']/i) || trContent.match(/<td[^>]*class=["'][^"']*ctry[^"']*["'][^>]*>([\s\S]*?)<\/td>/i);
+                            let country = "US";
+                            if (ctryMatch) {
+                                const cName = (ctryMatch[1] || "").trim();
+                                if (cName.toLowerCase().includes("india")) country = "IN";
+                                else if (cName.toLowerCase().includes("united states") || cName.toLowerCase().includes("us")) country = "US";
+                                else if (cName.toLowerCase().includes("china")) country = "CN";
+                                else if (cName.toLowerCase().includes("japan")) country = "JP";
+                                else if (cName.toLowerCase().includes("united kingdom") || cName.toLowerCase().includes("uk")) country = "UK";
+                                else if (cName.toLowerCase().includes("euro")) country = "EU";
+                                else country = cName.substring(0, 2).toUpperCase();
+                            }
+
+                            const timeMatch = trContent.match(/<td[^>]*class=["'][^"']*time[^"']*["'][^>]*>([\s\S]*?)<\/td>/i);
+                            const timeStr = timeMatch ? timeMatch[1].replace(/<[^>]+>/g, '').trim() : "12:00";
+
+                            const eventMatch = trContent.match(/<a[^>]*class=["'][^"']*evt_alink[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
+                            const title = eventMatch ? eventMatch[1].replace(/<[^>]+>/g, '').trim() : "";
+
+                            const tdValues = [];
+                            const tdValRegex = /<td[^>]*class=["'][^"']*tright[^"']*["'][^>]*>([\s\S]*?)<\/td>/gi;
+                            let tdValMatch;
+                            while ((tdValMatch = tdValRegex.exec(trContent)) !== null) {
+                                tdValues.push(tdValMatch[1].replace(/<[^>]+>/g, '').trim());
+                            }
+
+                            const actual = tdValues[0] || "-";
+                            const previous = tdValues[1] || "-";
+                            const forecast = tdValues[2] || "-";
+
+                            if (title) {
+                                events.push({
+                                    id: `mc_${dateStr}_${events.length}`,
+                                    country: country,
+                                    event: title,
+                                    impact: impact,
+                                    time: dateStr ? `${dateStr} ${timeStr}:00` : `2026-07-25 ${timeStr}:00`,
+                                    actual: actual,
+                                    forecast: forecast,
+                                    previous: previous
+                                });
+                            }
+                        }
+                    }
+                    resolve(events);
+                } catch(e) {
+                    logDebug(`Moneycontrol Calendar Scrape Error: ${e.message}`);
+                    resolve([]);
+                }
+            });
         });
-        const events = [];
-        const tableRegex = /<table[^>]*class=["'][^"']*multiTables[^"']*["'][^>]*id=["']([^"']+)["'][^>]*>([\s\S]*?)<\/table>/gi;
-        let tableMatch;
-
-        while ((tableMatch = tableRegex.exec(html)) !== null) {
-            const tableId = tableMatch[1];
-            const tableContent = tableMatch[2];
-
-            let dateStr = "";
-            const dateParts = tableId.split('-');
-            if (dateParts.length >= 3) {
-                const monthDay = dateParts[1];
-                const year = dateParts[2];
-                const monthMatch = monthDay.match(/([a-zA-Z]+)(\d+)/);
-                if (monthMatch) {
-                    const mName = monthMatch[1];
-                    const dayNum = monthMatch[2];
-                    const months = { January:"01", February:"02", March:"03", April:"04", May:"05", June:"06", July:"07", August:"08", September:"09", October:"10", November:"11", December:"12" };
-                    const mCode = months[mName] || "07";
-                    const dCode = dayNum.padStart(2, '0');
-                    dateStr = `${year}-${mCode}-${dCode}`;
-                }
-            }
-
-            const trRegex = /<tr[^>]*class=["'][^"']*tableData[^"']*["'][^>]*>([\s\S]*?)<\/tr>/gi;
-            let trMatch;
-            while ((trMatch = trRegex.exec(tableContent)) !== null) {
-                const trContent = trMatch[1];
-
-                const impactMatch = trMatch[0].match(/data-impact=["'](\d+)["']/);
-                let impact = "medium";
-                if (impactMatch) {
-                    const impVal = parseInt(impactMatch[1]);
-                    if (impVal >= 3) impact = "high";
-                    else if (impVal === 2) impact = "medium";
-                    else impact = "low";
-                }
-
-                const ctryMatch = trContent.match(/alt=["']([^"']+)["']/i) || trContent.match(/<td[^>]*class=["'][^"']*ctry[^"']*["'][^>]*>([\s\S]*?)<\/td>/i);
-                let country = "US";
-                if (ctryMatch) {
-                    const cName = (ctryMatch[1] || "").trim();
-                    if (cName.toLowerCase().includes("india")) country = "IN";
-                    else if (cName.toLowerCase().includes("united states") || cName.toLowerCase().includes("us")) country = "US";
-                    else if (cName.toLowerCase().includes("china")) country = "CN";
-                    else if (cName.toLowerCase().includes("japan")) country = "JP";
-                    else if (cName.toLowerCase().includes("united kingdom") || cName.toLowerCase().includes("uk")) country = "UK";
-                    else if (cName.toLowerCase().includes("euro")) country = "EU";
-                    else country = cName.substring(0, 2).toUpperCase();
-                }
-
-                const timeMatch = trContent.match(/<td[^>]*class=["'][^"']*time[^"']*["'][^>]*>([\s\S]*?)<\/td>/i);
-                const timeStr = timeMatch ? timeMatch[1].replace(/<[^>]+>/g, '').trim() : "12:00";
-
-                const eventMatch = trContent.match(/<a[^>]*class=["'][^"']*evt_alink[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
-                const title = eventMatch ? eventMatch[1].replace(/<[^>]+>/g, '').trim() : "";
-
-                const tdValues = [];
-                const tdValRegex = /<td[^>]*class=["'][^"']*tright[^"']*["'][^>]*>([\s\S]*?)<\/td>/gi;
-                let tdValMatch;
-                while ((tdValMatch = tdValRegex.exec(trContent)) !== null) {
-                    tdValues.push(tdValMatch[1].replace(/<[^>]+>/g, '').trim());
-                }
-
-                const actual = tdValues[0] || "-";
-                const previous = tdValues[1] || "-";
-                const forecast = tdValues[2] || "-";
-
-                if (title) {
-                    events.push({
-                        id: `mc_${dateStr}_${events.length}`,
-                        country: country,
-                        event: title,
-                        impact: impact,
-                        time: dateStr ? `${dateStr} ${timeStr}:00` : `2026-07-25 ${timeStr}:00`,
-                        actual: actual,
-                        forecast: forecast,
-                        previous: previous
-                    });
-                }
-            }
-        }
-        return events;
-    } catch(e) {
-        logDebug(`Moneycontrol Calendar Scrape Error: ${e.message}`);
-        return [];
-    }
+        req.on('error', (e) => {
+            logDebug(`Moneycontrol Request Error: ${e.message}`);
+            resolve([]);
+        });
+    });
 }
 
 function toDoubleSafe(value) {
