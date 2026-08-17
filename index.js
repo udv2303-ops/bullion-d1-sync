@@ -127,27 +127,19 @@ function isUsDst(date) {
     return date >= marchSunday && date < novSunday;
 }
 
-// Get date string for an asset based on US DST (for Spot assets) or normal IST (for others)
+// Get date string in standard IST (Indian Standard Time YYYY-MM-DD)
 function getAssetDateStringForTimestamp(asset, timestampMs) {
     const istTimeMs = timestampMs + (5.5 * 60 * 60 * 1000);
     const istDate = new Date(istTimeMs);
-    
-    if (asset === "XAU_USD" || asset === "XAG_USD") {
-        const dst = isUsDst(istDate);
-        const shiftMinutes = dst ? (2 * 60 + 30) : (3 * 60 + 30); // 2:30 AM or 3:30 AM IST
-        const shiftedDate = new Date(istTimeMs - shiftMinutes * 60 * 1000);
-        return shiftedDate.toISOString().split('T')[0];
-    } else {
-        return istDate.toISOString().split('T')[0];
-    }
+    return istDate.toISOString().split('T')[0];
 }
 
-// Get shifted date string for spot gold/silver based on US DST (2:30 AM/3:30 AM IST transition)
+// Get standard IST date string for spot and commodity assets
 function getSpotAssetDateString() {
-    return getAssetDateStringForTimestamp("XAU_USD", Date.now());
+    return getIstDateString();
 }
 
-// Calculate start and end millisecond timestamps for a given YYYY-MM-DD date and asset (DST aware)
+// Calculate start and end millisecond timestamps for a given YYYY-MM-DD date in IST (00:00:00 to 23:59:59.999)
 function getTimestampRangeForDate(asset, dateStr) {
     const parts = dateStr.split('-');
     if (parts.length !== 3) return null;
@@ -158,16 +150,8 @@ function getTimestampRangeForDate(asset, dateStr) {
     const baseDateIst = new Date(Date.UTC(year, month, day, 0, 0, 0));
     const midnightIstMs = baseDateIst.getTime() - 5.5 * 60 * 60 * 1000;
     
-    let startMs = midnightIstMs;
-    let endMs = midnightIstMs + 24 * 60 * 60 * 1000 - 1;
-    
-    if (asset === "XAU_USD" || asset === "XAG_USD") {
-        const dateForDst = new Date(midnightIstMs + 5.5 * 60 * 60 * 1000);
-        const dst = isUsDst(dateForDst);
-        const shiftMs = dst ? (2.5 * 60 * 60 * 1000) : (3.5 * 60 * 60 * 1000);
-        startMs += shiftMs;
-        endMs += shiftMs;
-    }
+    const startMs = midnightIstMs;
+    const endMs = midnightIstMs + 24 * 60 * 60 * 1000 - 1;
     
     return { startMs, endMs };
 }
