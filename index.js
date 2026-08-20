@@ -708,6 +708,15 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
         }
+        else if (path === '/api/debug-sync') {
+            await syncHarikalaBroadcast();
+            const dbRes = await queryD1(
+                "SELECT * FROM prices WHERE date = ?",
+                [getIstDateString()]
+            );
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(dbRes));
+        }
         else if (path === '/api/historical') {
             const asset = query.asset;
             const dbRes = await queryD1(
