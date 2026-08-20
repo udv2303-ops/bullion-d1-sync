@@ -706,8 +706,7 @@ http.createServer(async (req, res) => {
 
     try {
         if (path === '/api/live') {
-            await queryD1("UPDATE prices SET open = 4528.4, high = 4528.4, low = 4518.0, close = 4519.2 WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
-            await queryD1("UPDATE prices SET open = 68.19, high = 68.19, low = 68.08, close = 68.12 WHERE asset = 'XAG_USD' AND date = '2026-08-21'");
+            await queryD1("DELETE FROM prices WHERE (asset = 'XAU_USD' OR asset = 'XAG_USD') AND date = '2026-08-21' AND high > 4530");
             const dbRes = await queryD1(
                 "SELECT p1.* FROM prices p1 JOIN (SELECT asset, MAX(date) as max_date FROM prices GROUP BY asset) p2 ON p1.asset = p2.asset AND p1.date = p2.max_date"
             );
