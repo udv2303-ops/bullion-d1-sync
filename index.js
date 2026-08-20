@@ -443,28 +443,16 @@ async function syncHarikalaBroadcast() {
             if (name === "GOLD") {
                 // Spot Gold
                 const spotDateStr = getSpotAssetDateString();
-                await saveDailySummary("XAU_USD", spotDateStr, openVal, highVal, lowVal, closeVal);
-                if (highVal > 0 && lowVal > 0) {
-                    await queryD1(
-                        "UPDATE prices SET high = ?, low = ? WHERE asset = ? AND date = ?",
-                        [highVal, lowVal, "XAU_USD", spotDateStr]
-                    );
-                }
+                await saveDailySummary("XAU_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAU_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} H:${highVal} L:${lowVal} date ${spotDateStr}`);
+                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} with date ${spotDateStr}`);
             }
             else if (name === "SILVER") {
                 // Spot Silver
                 const spotDateStr = getSpotAssetDateString();
-                await saveDailySummary("XAG_USD", spotDateStr, openVal, highVal, lowVal, closeVal);
-                if (highVal > 0 && lowVal > 0) {
-                    await queryD1(
-                        "UPDATE prices SET high = ?, low = ? WHERE asset = ? AND date = ?",
-                        [highVal, lowVal, "XAG_USD", spotDateStr]
-                    );
-                }
+                await saveDailySummary("XAG_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAG_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} H:${highVal} L:${lowVal} date ${spotDateStr}`);
+                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
             }
             else if (name === "GOLD FUTURE") {
                 // MCX Gold Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
@@ -990,7 +978,13 @@ async function initDatabaseIndexes() {
         logDebug("Initializing D1 Database indexes...");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
-        logDebug("D1 Database indexes initialized successfully.");
+        
+        logDebug("Cleaning up Spot prices for correct DST session dates...");
+        await queryD1("UPDATE prices SET open = 4522.65, high = 4541.0, low = 4450.58, close = 4528.4 WHERE asset = 'XAU_USD' AND date = '2026-08-20'");
+        await queryD1("UPDATE prices SET open = 68.19, high = 68.96, low = 65.63, close = 68.19 WHERE asset = 'XAG_USD' AND date = '2026-08-20'");
+        await queryD1("UPDATE prices SET open = 4528.4, high = 4528.4, low = 4518.0, close = 4519.2 WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
+        await queryD1("UPDATE prices SET open = 68.19, high = 68.19, low = 68.08, close = 68.12 WHERE asset = 'XAG_USD' AND date = '2026-08-21'");
+        logDebug("Spot prices cleaned up successfully.");
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
     }
