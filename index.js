@@ -427,15 +427,27 @@ async function syncHarikalaBroadcast() {
                 // Spot Gold
                 const spotDateStr = getSpotAssetDateString();
                 await saveDailySummary("XAU_USD", spotDateStr, openVal, highVal, lowVal, closeVal);
+                if (highVal > 0 && lowVal > 0) {
+                    await queryD1(
+                        "UPDATE prices SET high = ?, low = ? WHERE asset = ? AND date = ?",
+                        [highVal, lowVal, "XAU_USD", spotDateStr]
+                    );
+                }
                 await saveIntradayTick("XAU_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} with date ${spotDateStr}`);
+                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} H:${highVal} L:${lowVal} date ${spotDateStr}`);
             }
             else if (name === "SILVER") {
                 // Spot Silver
                 const spotDateStr = getSpotAssetDateString();
                 await saveDailySummary("XAG_USD", spotDateStr, openVal, highVal, lowVal, closeVal);
+                if (highVal > 0 && lowVal > 0) {
+                    await queryD1(
+                        "UPDATE prices SET high = ?, low = ? WHERE asset = ? AND date = ?",
+                        [highVal, lowVal, "XAG_USD", spotDateStr]
+                    );
+                }
                 await saveIntradayTick("XAG_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
+                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} H:${highVal} L:${lowVal} date ${spotDateStr}`);
             }
             else if (name === "GOLD FUTURE") {
                 // MCX Gold Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
