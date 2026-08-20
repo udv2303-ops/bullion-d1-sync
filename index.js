@@ -588,19 +588,29 @@ async function sendGoldGstRateMessage(customGroupId = null) {
         hour12: true
     });
 
-    const formatInr = (val) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(val);
+    const roundedRate = Math.round(gstPrice);
 
-    const messageText = 
-`${config.customHeader || '🏆 *GOLD 999 WITH GST RATE* 🏆'}
+    const defaultTemplate = 
+`⭐ *HARIKALA BULLION LLP* ⭐
 
-📅 *Date*: ${dateStr}
-⏰ *Time*: ${timeStr} IST
+*999 (100 GM BAR)*
+🟡 *RTGS :- ${roundedRate}*
 
-✨ *Live Rate*: ₹ ${formatInr(gstPrice)}
-📈 *High*: ₹ ${formatInr(highPrice)}
-📉 *Low*: ₹ ${formatInr(lowPrice)}
+*FOR BOOKING*
+☎️:-0261-2564900
+☎️:-0261-2564901
+📱:-9978593937
+📱:-9925593937
 
-📲 _Sent via Metal Logs Live Bullion_`;
+👇 *Visit for live rate* 👇 
+
+Website :- www.harikalabullion.com
+
+Play Store :- https://play.google.com/store/apps/details?id=com.chirayusoft.harikalabullion
+
+App store :- https://apps.apple.com/in/app/harikala-bullion/id1518372373`;
+
+    const messageText = config.customTemplate ? config.customTemplate.replace('{rate}', roundedRate) : defaultTemplate;
 
     await waSock.sendMessage(groupId, { text: messageText });
     logDebug(`[WA SENT] Successfully sent 11:00 AM GST Rate Message to ${groupId}`);
