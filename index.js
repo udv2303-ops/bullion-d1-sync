@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const QRCode = require('qrcode');
 const pino = require('pino');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 
 // Cloudflare Credentials (loaded from Environment Variables for security)
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -508,12 +508,22 @@ async function initWhatsApp() {
         logDebug('[WA] Initializing Baileys WhatsApp client...');
         const authFolder = path.join(__dirname, 'auth_info_baileys');
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+        
+        let version = [2, 3000, 1015901307];
+        try {
+            const vRes = await fetchLatestBaileysVersion();
+            if (vRes?.version) version = vRes.version;
+            logDebug(`[WA] Using WhatsApp Web version v${version.join('.')}`);
+        } catch (ve) {
+            logDebug(`[WA VERSION FETCH WARN] ${ve.message}, using fallback version.`);
+        }
 
         waSock = makeWASocket({
+            version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: true,
             auth: state,
-            browser: Browsers.ubuntu('Chrome'),
+            browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
             generateHighQualityLinkPreview: false,
             connectTimeoutMs: 60000,
