@@ -509,40 +509,68 @@ async function initWhatsApp() {
         const authFolder = path.join(__dirname, 'auth_info_baileys');
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
-        waSock = makeWASocket({
+        const sock = makeWASocket({
             logger: pino({ level: 'silent' }),
             printQRInTerminal: true,
             auth: state,
-            browser: ["Metal Logs Bullion", "Chrome", "1.0.0"]
+            browser: ["Metal Logs Bullion", "Chrome", "1.0.0"],
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 0,
+            keepAliveIntervalMs: 25000,
+            emitOwnEvents: true
         });
 
-        waSock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
-        waSock.ev.on('connection.update', (update) => {
+        sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
             if (qr) {
                 latestQrCode = qr;
                 isWaConnected = false;
-                logDebug('[WA] New QR code generated. Scan via /whatsapp-qr route or Terminal.');
+                logDebug(`[WA] New QR code emitted by Baileys (${qr.length} chars). Scan via /whatsapp-qr route.`);
             }
             if (connection === 'close') {
                 isWaConnected = false;
-                latestQrCode = null;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = (statusCode !== DisconnectReason.loggedOut);
-                logDebug(`[WA] Connection closed due to ${lastDisconnect?.error?.message}. Reconnecting: ${shouldReconnect}`);
+                logDebug(`[WA] Connection closed. StatusCode: ${statusCode}. Reconnecting: ${shouldReconnect}`);
                 if (shouldReconnect) {
                     setTimeout(initWhatsApp, 5000);
                 }
             } else if (connection === 'open') {
                 isWaConnected = true;
                 latestQrCode = null;
-                waConnectedUser = waSock.user?.name || waSock.user?.id || 'Connected User';
+                waConnectedUser = sock.user?.name || sock.user?.id || 'Connected User';
                 logDebug(`[WA] Successfully connected to WhatsApp! User: ${waConnectedUser}`);
             }
         });
+
+        waSock = sock;
     } catch (e) {
         logDebug(`[WA INIT ERROR] ${e.message}`);
+    }
+}
+
+async function resetWhatsAppSession() {
+    try {
+        logDebug('[WA] Resetting WhatsApp session and clearing auth folder...');
+        if (waSock) {
+            try { waSock.end(new Error("Manual session reset")); } catch (e) {}
+            waSock = null;
+        }
+        isWaConnected = false;
+        latestQrCode = null;
+        waConnectedUser = null;
+
+        const authFolder = path.join(__dirname, 'auth_info_baileys');
+        if (fs.existsSync(authFolder)) {
+            fs.rmSync(authFolder, { recursive: true, force: true });
+        }
+        await initWhatsApp();
+        return { success: true, message: "WhatsApp session reset. New QR code generating..." };
+    } catch (e) {
+        logDebug(`[WA RESET ERROR] ${e.message}`);
+        throw e;
     }
 }
 
@@ -781,14 +809,36 @@ http.createServer(async (req, res) => {
                     <html>
                     <head>
                         <title>Initializing WhatsApp...</title>
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
                         <meta http-equiv="refresh" content="4">
                     </head>
-                    <body style="font-family: sans-serif; text-align: center; padding: 40px;">
-                        <h2>Initializing WhatsApp Client...</h2>
-                        <p>Generating new QR Code. Please wait a few seconds...</p>
+                    <body style="font-family: sans-serif; text-align: center; padding: 40px; background-color: #f9fafb;">
+                        <h2 style="color: #1f2937;">Initializing WhatsApp Engine...</h2>
+                        <p style="color: #6b7280; font-size: 14px;">Generating fresh QR Code. Page will auto-refresh in 4 seconds.</p>
+                        <br/>
+                        <a href="/api/whatsapp/reset" style="display: inline-block; padding: 12px 24px; background: #16a34a; color: white; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 14px;">🔄 Force Generate New QR Code</a>
                     </body>
                     </html>
                 `);
+            }
+        }
+        else if (path === '/api/whatsapp/reset') {
+            try {
+                const resData = await resetWhatsAppSession();
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head><meta http-equiv="refresh" content="3;url=/whatsapp-qr"></head>
+                    <body style="font-family: sans-serif; text-align: center; padding: 40px;">
+                        <h2 style="color: #16a34a;">Resetting WhatsApp Session...</h2>
+                        <p>Redirecting to QR Code page in 3 seconds...</p>
+                    </body>
+                    </html>
+                `);
+            } catch (e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: e.message }));
             }
         }
         else if (path === '/api/whatsapp/status') {
