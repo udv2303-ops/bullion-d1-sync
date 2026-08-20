@@ -529,14 +529,11 @@ async function initWhatsApp() {
                 isWaConnected = false;
                 latestQrCode = null;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                logDebug(`[WA] Connection closed due to ${lastDisconnect?.error?.message} (code ${statusCode}). Auto-restarting WhatsApp engine...`);
-                if (statusCode === DisconnectReason.loggedOut) {
-                    logDebug('[WA] Logged out. Clearing session data...');
-                    try {
-                        fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
-                    } catch (e) {}
-                }
-                setTimeout(initWhatsApp, 3000);
+                logDebug(`[WA] Connection closed due to ${lastDisconnect?.error?.message} (code ${statusCode}). Clearing stale session & auto-generating new QR code...`);
+                try {
+                    fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
+                } catch (e) {}
+                setTimeout(initWhatsApp, 2000);
             } else if (connection === 'open') {
                 isWaConnected = true;
                 latestQrCode = null;
