@@ -732,11 +732,11 @@ http.createServer(async (req, res) => {
             const range = getTimestampRangeForDate("XAU_USD", spotDate);
             if (range) {
                 await queryD1(
-                    "UPDATE prices SET high = (SELECT COALESCE(MAX(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?), low = (SELECT COALESCE(MIN(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?) WHERE asset = 'XAU_USD' AND date = ?",
+                    "UPDATE prices SET high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?) WHERE asset = 'XAU_USD' AND date = ?",
                     [range.startMs, range.startMs, spotDate]
                 );
                 await queryD1(
-                    "UPDATE prices SET high = (SELECT COALESCE(MAX(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?), low = (SELECT COALESCE(MIN(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?) WHERE asset = 'XAG_USD' AND date = ?",
+                    "UPDATE prices SET high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?) WHERE asset = 'XAG_USD' AND date = ?",
                     [range.startMs, range.startMs, spotDate]
                 );
             }
