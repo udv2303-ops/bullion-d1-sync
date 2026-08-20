@@ -777,9 +777,7 @@ http.createServer(async (req, res) => {
                 `);
             } else if (latestQrCode) {
                 try {
-                    const encodedQr = encodeURIComponent(latestQrCode);
-                    const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodedQr}`;
-                    const qrDataUrl = await QRCode.toDataURL(latestQrCode);
+                    const qrDataUrl = await QRCode.toDataURL(latestQrCode, { width: 300, margin: 2 });
                     res.end(`
                         <!DOCTYPE html>
                         <html>
@@ -793,10 +791,12 @@ http.createServer(async (req, res) => {
                             <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">Open WhatsApp on phone &gt; Settings/Menu &gt; Linked Devices &gt; Link a Device</p>
                             
                             <div style="display: inline-block; padding: 12px; background: white; border: 4px solid #10b981; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                                <img src="${qrApiUrl}" onerror="this.onerror=null; this.src='${qrDataUrl}';" style="width: 260px; height: 260px; display: block;" alt="WhatsApp QR Code" />
+                                <img src="${qrDataUrl}" style="width: 260px; height: 260px; display: block;" alt="WhatsApp QR Code" />
                             </div>
 
                             <p style="color: #9ca3af; font-size: 12px; margin-top: 15px;">Page auto-refreshes every 6 seconds...</p>
+                            <br/>
+                            <a href="/api/whatsapp/reset" style="display: inline-block; padding: 10px 20px; background: #6b7280; color: white; border-radius: 8px; text-decoration: none; font-size: 13px;">🔄 Reset / Get New QR</a>
                         </body>
                         </html>
                     `);
