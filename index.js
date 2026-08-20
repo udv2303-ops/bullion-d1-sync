@@ -208,13 +208,16 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
             const range = getTimestampRangeForDate(asset, dateStr);
             if (range) {
                 const tickRes = await queryD1(
-                    "SELECT MAX(price) as max_price, MIN(price) as min_price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ?",
+                    "SELECT MAX(CAST(price AS REAL)) as max_price, MIN(CAST(price AS REAL)) as min_price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ?",
                     [asset, range.startMs, range.endMs]
                 );
                 const tickRow = tickRes.result?.[0]?.results?.[0];
                 if (tickRow && tickRow.max_price > 0) {
                     targetHigh = tickRow.max_price;
                     targetLow = tickRow.min_price;
+                } else {
+                    targetHigh = close;
+                    targetLow = close;
                 }
             }
         }
@@ -724,8 +727,18 @@ http.createServer(async (req, res) => {
 
     try {
         if (path === '/api/live') {
-            await queryD1("DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND date = '2026-08-21'");
-            await syncHarikalaBroadcast();
+            const spotDate = getSpotAssetDateString();
+            const range = getTimestampRangeForDate("XAU_USD", spotDate);
+            if (range) {
+                await queryD1(
+                    "UPDATE prices SET high = (SELECT COALESCE(MAX(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?), low = (SELECT COALESCE(MIN(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?) WHERE asset = 'XAU_USD' AND date = ?",
+                    [range.startMs, range.startMs, spotDate]
+                );
+                await queryD1(
+                    "UPDATE prices SET high = (SELECT COALESCE(MAX(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?), low = (SELECT COALESCE(MIN(CAST(price AS REAL)), close) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?) WHERE asset = 'XAG_USD' AND date = ?",
+                    [range.startMs, range.startMs, spotDate]
+                );
+            }
             const dbRes = await queryD1(
                 "SELECT p1.* FROM prices p1 JOIN (SELECT asset, MAX(date) as max_date FROM prices GROUP BY asset) p2 ON p1.asset = p2.asset AND p1.date = p2.max_date"
             );
