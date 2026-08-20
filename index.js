@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const QRCode = require('qrcode');
 const pino = require('pino');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 
 // Cloudflare Credentials (loaded from Environment Variables for security)
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -513,7 +513,12 @@ async function initWhatsApp() {
             logger: pino({ level: 'silent' }),
             printQRInTerminal: true,
             auth: state,
-            browser: ["Metal Logs Bullion", "Chrome", "1.0.0"]
+            browser: Browsers.ubuntu('Chrome'),
+            syncFullHistory: false,
+            generateHighQualityLinkPreview: false,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 25000
         });
 
         waSock.ev.on('creds.update', saveCreds);
@@ -523,22 +528,30 @@ async function initWhatsApp() {
             if (qr) {
                 latestQrCode = qr;
                 isWaConnected = false;
-                logDebug('[WA] New QR code generated. Scan via /whatsapp-qr route or Terminal.');
+                logDebug('[WA] New QR code generated. Ready to scan.');
             }
             if (connection === 'close') {
                 isWaConnected = false;
                 latestQrCode = null;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                logDebug(`[WA] Connection closed due to ${lastDisconnect?.error?.message} (code ${statusCode}). Clearing stale session & auto-generating new QR code...`);
-                try {
-                    fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
-                } catch (e) {}
-                setTimeout(initWhatsApp, 2000);
+                logDebug(`[WA] Connection closed: ${lastDisconnect?.error?.message || 'closed'} (code ${statusCode}).`);
+                
+                if (statusCode === DisconnectReason.loggedOut) {
+                    logDebug('[WA] Explicitly logged out. Clearing credentials folder...');
+                    try {
+                        fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
+                    } catch (e) {}
+                }
+                
+                // Reconnect immediately to finalize login or refresh socket
+                setTimeout(initWhatsApp, 1500);
+            } else if (connection === 'connecting') {
+                logDebug('[WA] Connecting to WhatsApp servers...');
             } else if (connection === 'open') {
                 isWaConnected = true;
                 latestQrCode = null;
                 waConnectedUser = waSock.user?.name || waSock.user?.id || 'Connected User';
-                logDebug(`[WA] Successfully connected to WhatsApp! User: ${waConnectedUser}`);
+                logDebug(`[WA] ✅ WhatsApp Connected Successfully! User: ${waConnectedUser}`);
             }
         });
     } catch (e) {
