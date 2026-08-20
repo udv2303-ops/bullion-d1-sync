@@ -297,8 +297,8 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
                     const lowVal = toDoubleSafe(quote.low[idx]) || closeVal;
                     
                     if (closeVal > 0.0) {
-                        const dateStr = getIstDateString();
-                        await saveDailySummary(assetName, dateStr, openVal > 0 ? openVal : closeVal, highVal, lowVal, closeVal);
+                        const spotDateStr = getSpotAssetDateString();
+                        await saveDailySummary(assetName, spotDateStr, closeVal, closeVal, closeVal, closeVal);
                         await saveIntradayTick(assetName, closeVal);
                     }
                 }
