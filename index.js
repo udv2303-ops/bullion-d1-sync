@@ -201,6 +201,24 @@ async function saveIntradayTick(asset, price) {
 async function saveDailySummary(asset, dateStr, open, high, low, close) {
     try {
         const timestamp = Date.now();
+        let targetHigh = high;
+        let targetLow = low;
+
+        if (asset === "XAU_USD" || asset === "XAG_USD") {
+            const range = getTimestampRangeForDate(asset, dateStr);
+            if (range) {
+                const tickRes = await queryD1(
+                    "SELECT MAX(price) as max_price, MIN(price) as min_price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ?",
+                    [asset, range.startMs, range.endMs]
+                );
+                const tickRow = tickRes.result?.[0]?.results?.[0];
+                if (tickRow && tickRow.max_price > 0) {
+                    targetHigh = tickRow.max_price;
+                    targetLow = tickRow.min_price;
+                }
+            }
+        }
+
         const checkRes = await queryD1(
             "SELECT id, open, high, low FROM prices WHERE asset = ? AND date = ?",
             [asset, dateStr]
@@ -210,8 +228,8 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         if (rows.length > 0) {
             const existing = rows[0];
             const updatedOpen = existing.open > 0 ? existing.open : open;
-            const updatedHigh = high > 0 ? Math.max(existing.high || 0.0, high) : (existing.high || 0.0);
-            const updatedLow = (existing.low > 0.0 && low > 0.0) ? Math.min(existing.low, low) : (low > 0.0 ? low : (existing.low || close));
+            const updatedHigh = (asset === "XAU_USD" || asset === "XAG_USD") ? Math.max(targetHigh, close) : Math.max(existing.high || 0.0, targetHigh);
+            const updatedLow = (asset === "XAU_USD" || asset === "XAG_USD") ? Math.min(targetLow, close) : Math.min(existing.low || close, targetLow);
 
             await queryD1(
                 "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
@@ -220,7 +238,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         } else {
             await queryD1(
                 "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [asset, dateStr, open, high, low, close, timestamp]
+                [asset, dateStr, open, targetHigh > 0 ? targetHigh : close, targetLow > 0 ? targetLow : close, close, timestamp]
             );
         }
     } catch (e) {
