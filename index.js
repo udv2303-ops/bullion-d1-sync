@@ -509,68 +509,40 @@ async function initWhatsApp() {
         const authFolder = path.join(__dirname, 'auth_info_baileys');
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
-        const sock = makeWASocket({
+        waSock = makeWASocket({
             logger: pino({ level: 'silent' }),
             printQRInTerminal: true,
             auth: state,
-            browser: ["Metal Logs Bullion", "Chrome", "1.0.0"],
-            connectTimeoutMs: 60000,
-            defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 25000,
-            emitOwnEvents: true
+            browser: ["Metal Logs Bullion", "Chrome", "1.0.0"]
         });
 
-        sock.ev.on('creds.update', saveCreds);
+        waSock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', (update) => {
+        waSock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
             if (qr) {
                 latestQrCode = qr;
                 isWaConnected = false;
-                logDebug(`[WA] New QR code emitted by Baileys (${qr.length} chars). Scan via /whatsapp-qr route.`);
+                logDebug('[WA] New QR code generated. Scan via /whatsapp-qr route or Terminal.');
             }
             if (connection === 'close') {
                 isWaConnected = false;
+                latestQrCode = null;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = (statusCode !== DisconnectReason.loggedOut);
-                logDebug(`[WA] Connection closed. StatusCode: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+                logDebug(`[WA] Connection closed due to ${lastDisconnect?.error?.message}. Reconnecting: ${shouldReconnect}`);
                 if (shouldReconnect) {
                     setTimeout(initWhatsApp, 5000);
                 }
             } else if (connection === 'open') {
                 isWaConnected = true;
                 latestQrCode = null;
-                waConnectedUser = sock.user?.name || sock.user?.id || 'Connected User';
+                waConnectedUser = waSock.user?.name || waSock.user?.id || 'Connected User';
                 logDebug(`[WA] Successfully connected to WhatsApp! User: ${waConnectedUser}`);
             }
         });
-
-        waSock = sock;
     } catch (e) {
         logDebug(`[WA INIT ERROR] ${e.message}`);
-    }
-}
-
-async function resetWhatsAppSession() {
-    try {
-        logDebug('[WA] Resetting WhatsApp session and clearing auth folder...');
-        if (waSock) {
-            try { waSock.end(new Error("Manual session reset")); } catch (e) {}
-            waSock = null;
-        }
-        isWaConnected = false;
-        latestQrCode = null;
-        waConnectedUser = null;
-
-        const authFolder = path.join(__dirname, 'auth_info_baileys');
-        if (fs.existsSync(authFolder)) {
-            fs.rmSync(authFolder, { recursive: true, force: true });
-        }
-        await initWhatsApp();
-        return { success: true, message: "WhatsApp session reset. New QR code generating..." };
-    } catch (e) {
-        logDebug(`[WA RESET ERROR] ${e.message}`);
-        throw e;
     }
 }
 
@@ -763,83 +735,73 @@ http.createServer(async (req, res) => {
         }
         else if (path === '/whatsapp-qr') {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            if (isWaConnected) {
-                res.end(`
-                    <!DOCTYPE html>
-                    <html>
-                    <head><title>WhatsApp Status</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-                    <body style="font-family: sans-serif; text-align: center; padding: 40px; background-color: #f0fdf4;">
-                        <h1 style="color: #16a34a;">✅ WhatsApp is Connected!</h1>
-                        <p style="font-size: 18px;">Connected User: <strong>${waConnectedUser || 'Active'}</strong></p>
-                        <p style="color: #4b5563;">Daily 11:00 AM GST Rate messages will be sent automatically to your selected group.</p>
-                    </body>
-                    </html>
-                `);
-            } else if (latestQrCode) {
-                try {
-                    const qrDataUrl = await QRCode.toDataURL(latestQrCode, { width: 300, margin: 2 });
-                    res.end(`
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <title>Scan WhatsApp QR Code</title>
-                            <meta name="viewport" content="width=device-width, initial-scale=1">
-                            <meta http-equiv="refresh" content="6">
-                        </head>
-                        <body style="font-family: sans-serif; text-align: center; padding: 20px; background-color: #f9fafb;">
-                            <h2 style="color: #1f2937;">Scan QR Code to Connect WhatsApp</h2>
-                            <p style="color: #6b7280; font-size: 14px; margin-bottom: 20px;">Open WhatsApp on phone &gt; Settings/Menu &gt; Linked Devices &gt; Link a Device</p>
-                            
-                            <div style="display: inline-block; padding: 12px; background: white; border: 4px solid #10b981; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                                <img src="${qrDataUrl}" style="width: 260px; height: 260px; display: block;" alt="WhatsApp QR Code" />
-                            </div>
+            res.end(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Scan WhatsApp QR Code</title>
+                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                    <style>
+                        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; padding: 24px; background-color: #f9fafb; color: #111827; }
+                        .card { max-width: 380px; margin: 0 auto; background: white; border-radius: 20px; padding: 24px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08); border: 1px solid #e5e7eb; }
+                        .qr-box { display: inline-block; padding: 12px; background: white; border: 4px solid #10b981; border-radius: 16px; margin: 16px 0; }
+                        img { width: 250px; height: 250px; display: block; border-radius: 8px; }
+                        .status { font-weight: 600; font-size: 14px; color: #059669; }
+                    </style>
+                </head>
+                <body>
+                    <div class="card" id="mainCard">
+                        <h2 style="margin-top:0; color:#1f2937;">Connect WhatsApp</h2>
+                        <p style="color:#6b7280; font-size:13.5px; line-height:1.4;">Open WhatsApp on phone &gt; Settings/Menu &gt; Linked Devices &gt; Link a Device</p>
+                        
+                        <div class="qr-box">
+                            <img id="qrImg" src="" alt="Loading QR Code..." />
+                        </div>
+                        
+                        <p class="status" id="statusText">Generating Live QR Code...</p>
+                    </div>
 
-                            <p style="color: #9ca3af; font-size: 12px; margin-top: 15px;">Page auto-refreshes every 6 seconds...</p>
-                            <br/>
-                            <a href="/api/whatsapp/reset" style="display: inline-block; padding: 10px 20px; background: #6b7280; color: white; border-radius: 8px; text-decoration: none; font-size: 13px;">🔄 Reset / Get New QR</a>
-                        </body>
-                        </html>
-                    `);
-                } catch (e) {
-                    res.end(`<h3>Error generating QR Code image: ${e.message}</h3>`);
-                }
-            } else {
-                res.end(`
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <title>Initializing WhatsApp...</title>
-                        <meta name="viewport" content="width=device-width, initial-scale=1">
-                        <meta http-equiv="refresh" content="4">
-                    </head>
-                    <body style="font-family: sans-serif; text-align: center; padding: 40px; background-color: #f9fafb;">
-                        <h2 style="color: #1f2937;">Initializing WhatsApp Engine...</h2>
-                        <p style="color: #6b7280; font-size: 14px;">Generating fresh QR Code. Page will auto-refresh in 4 seconds.</p>
-                        <br/>
-                        <a href="/api/whatsapp/reset" style="display: inline-block; padding: 12px 24px; background: #16a34a; color: white; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 14px;">🔄 Force Generate New QR Code</a>
-                    </body>
-                    </html>
-                `);
-            }
+                    <script>
+                        async function updateQr() {
+                            try {
+                                const res = await fetch('/api/whatsapp/qr-data');
+                                const data = await res.json();
+                                const card = document.getElementById('mainCard');
+                                
+                                if (data.connected) {
+                                    card.innerHTML = \`
+                                        <h1 style="color: #16a34a; margin-top: 10px;">✅ WhatsApp Connected!</h1>
+                                        <p style="font-size: 16px; color: #374151;">User: <strong>\${data.user || 'Active'}</strong></p>
+                                        <p style="color: #6b7280; font-size: 13px;">Daily 11:00 AM GST Rate messages will auto-send to your target group.</p>
+                                    \`;
+                                } else if (data.qr) {
+                                    const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(data.qr);
+                                    const img = document.getElementById('qrImg');
+                                    if (img.src !== qrUrl) {
+                                        img.src = qrUrl;
+                                    }
+                                    document.getElementById('statusText').innerText = "Live QR Code • Ready to Scan";
+                                } else {
+                                    document.getElementById('statusText').innerText = "Waiting for new QR code...";
+                                }
+                            } catch (e) {
+                                console.error(e);
+                            }
+                        }
+                        updateQr();
+                        setInterval(updateQr, 2500);
+                    </script>
+                </body>
+                </html>
+            `);
         }
-        else if (path === '/api/whatsapp/reset') {
-            try {
-                const resData = await resetWhatsAppSession();
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(`
-                    <!DOCTYPE html>
-                    <html>
-                    <head><meta http-equiv="refresh" content="3;url=/whatsapp-qr"></head>
-                    <body style="font-family: sans-serif; text-align: center; padding: 40px;">
-                        <h2 style="color: #16a34a;">Resetting WhatsApp Session...</h2>
-                        <p>Redirecting to QR Code page in 3 seconds...</p>
-                    </body>
-                    </html>
-                `);
-            } catch (e) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: e.message }));
-            }
+        else if (path === '/api/whatsapp/qr-data') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                connected: isWaConnected,
+                user: waConnectedUser,
+                qr: latestQrCode
+            }));
         }
         else if (path === '/api/whatsapp/status') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
