@@ -192,9 +192,9 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
 
         if (rows.length > 0) {
             const existing = rows[0];
-            const updatedOpen = existing.open || open;
-            const updatedHigh = Math.max(existing.high || 0.0, high);
-            const updatedLow = existing.low <= 0.0 ? low : Math.min(existing.low, low);
+            const updatedOpen = existing.open > 0 ? existing.open : open;
+            const updatedHigh = high > 0 ? Math.max(existing.high || 0.0, high) : (existing.high || 0.0);
+            const updatedLow = (existing.low > 0.0 && low > 0.0) ? Math.min(existing.low, low) : (low > 0.0 ? low : (existing.low || close));
 
             await queryD1(
                 "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
@@ -419,6 +419,7 @@ async function syncHarikalaBroadcast() {
             const bidVal = parts[2] === '-' ? closeVal : toDoubleSafe(parts[2]); // Index 2 is bid/open
             const highVal = parts[4] ? toDoubleSafe(parts[4]) : closeVal;
             const lowVal = parts[5] ? toDoubleSafe(parts[5]) : closeVal;
+            const openVal = bidVal > 0 ? bidVal : closeVal;
             
             if (closeVal <= 0.0) continue;
             
