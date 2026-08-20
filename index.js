@@ -3,6 +3,11 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const https = require('https');
 const urlModule = require('url');
 const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const QRCode = require('qrcode');
+const pino = require('pino');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 
 // Cloudflare Credentials (loaded from Environment Variables for security)
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -469,6 +474,162 @@ async function runSyncCycle() {
     logDebug(`[SYNC CYCLE END]`);
 }
 
+// WhatsApp Baileys State & Integration
+let waSock = null;
+let latestQrCode = null;
+let isWaConnected = false;
+let waConnectedUser = null;
+let lastSent11AmDate = '';
+
+const WA_CONFIG_FILE = path.join(__dirname, 'whatsapp_config.json');
+
+function loadWaConfig() {
+    try {
+        if (fs.existsSync(WA_CONFIG_FILE)) {
+            return JSON.parse(fs.readFileSync(WA_CONFIG_FILE, 'utf8'));
+        }
+    } catch (e) {
+        logDebug(`[WA CONFIG READ ERROR] ${e.message}`);
+    }
+    return { targetGroupId: '', customHeader: '🏆 *GOLD 999 WITH GST RATE* 🏆', autoSend11Am: true };
+}
+
+function saveWaConfig(cfg) {
+    try {
+        fs.writeFileSync(WA_CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
+        logDebug(`[WA CONFIG SAVED] ${JSON.stringify(cfg)}`);
+    } catch (e) {
+        logDebug(`[WA CONFIG SAVE ERROR] ${e.message}`);
+    }
+}
+
+async function initWhatsApp() {
+    try {
+        logDebug('[WA] Initializing Baileys WhatsApp client...');
+        const authFolder = path.join(__dirname, 'auth_info_baileys');
+        const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+
+        waSock = makeWASocket({
+            logger: pino({ level: 'silent' }),
+            printQRInTerminal: true,
+            auth: state,
+            browser: ["Metal Logs Bullion", "Chrome", "1.0.0"]
+        });
+
+        waSock.ev.on('creds.update', saveCreds);
+
+        waSock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            if (qr) {
+                latestQrCode = qr;
+                isWaConnected = false;
+                logDebug('[WA] New QR code generated. Scan via /whatsapp-qr route or Terminal.');
+            }
+            if (connection === 'close') {
+                isWaConnected = false;
+                latestQrCode = null;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = (statusCode !== DisconnectReason.loggedOut);
+                logDebug(`[WA] Connection closed due to ${lastDisconnect?.error?.message}. Reconnecting: ${shouldReconnect}`);
+                if (shouldReconnect) {
+                    setTimeout(initWhatsApp, 5000);
+                }
+            } else if (connection === 'open') {
+                isWaConnected = true;
+                latestQrCode = null;
+                waConnectedUser = waSock.user?.name || waSock.user?.id || 'Connected User';
+                logDebug(`[WA] Successfully connected to WhatsApp! User: ${waConnectedUser}`);
+            }
+        });
+    } catch (e) {
+        logDebug(`[WA INIT ERROR] ${e.message}`);
+    }
+}
+
+async function sendGoldGstRateMessage(customGroupId = null) {
+    const config = loadWaConfig();
+    const groupId = customGroupId || config.targetGroupId;
+
+    if (!isWaConnected || !waSock) {
+        throw new Error("WhatsApp client is not connected. Please scan QR code at /whatsapp-qr first.");
+    }
+    if (!groupId) {
+        throw new Error("No target WhatsApp Group ID configured. Select target group in app or API.");
+    }
+
+    let gstPrice = lastPrices["GOLD_999_GST"] || 0.0;
+    let openPrice = gstPrice;
+    let highPrice = gstPrice;
+    let lowPrice = gstPrice;
+    let dateStr = getIstDateString();
+
+    try {
+        const dbRes = await queryD1(
+            "SELECT * FROM prices WHERE asset = ? ORDER BY date DESC LIMIT 1",
+            ["GOLD_999_GST"]
+        );
+        const rows = dbRes?.result?.[0]?.results || [];
+        if (rows.length > 0) {
+            const row = rows[0];
+            if (row.close > 0) gstPrice = row.close;
+            if (row.open > 0) openPrice = row.open;
+            if (row.high > 0) highPrice = row.high;
+            if (row.low > 0) lowPrice = row.low;
+            if (row.date) dateStr = row.date;
+        }
+    } catch (e) {
+        logDebug(`[WA RATE FETCH WARNING] ${e.message}`);
+    }
+
+    const timeStr = new Date().toLocaleTimeString("en-US", {
+        timeZone: "Asia/Kolkata",
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
+
+    const formatInr = (val) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(val);
+
+    const messageText = 
+`${config.customHeader || '🏆 *GOLD 999 WITH GST RATE* 🏆'}
+
+📅 *Date*: ${dateStr}
+⏰ *Time*: ${timeStr} IST
+
+✨ *Live Rate*: ₹ ${formatInr(gstPrice)}
+📈 *High*: ₹ ${formatInr(highPrice)}
+📉 *Low*: ₹ ${formatInr(lowPrice)}
+
+📲 _Sent via Metal Logs Live Bullion_`;
+
+    await waSock.sendMessage(groupId, { text: messageText });
+    logDebug(`[WA SENT] Successfully sent 11:00 AM GST Rate Message to ${groupId}`);
+    return { success: true, groupId, messageText };
+}
+
+// 11:00 AM IST Auto-Sender Loop
+setInterval(async () => {
+    try {
+        const nowIstStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+        const nowIst = new Date(nowIstStr);
+        const hours = nowIst.getHours();
+        const minutes = nowIst.getMinutes();
+        const todayIstStr = `${nowIst.getFullYear()}-${String(nowIst.getMonth() + 1).padStart(2, '0')}-${String(nowIst.getDate()).padStart(2, '0')}`;
+
+        // Trigger at 11:00 AM IST
+        if (hours === 11 && minutes === 0 && lastSent11AmDate !== todayIstStr) {
+            const config = loadWaConfig();
+            if (config.autoSend11Am && config.targetGroupId && isWaConnected) {
+                logDebug(`[11:00 AM SCHEDULER] Triggering daily WhatsApp rate send...`);
+                lastSent11AmDate = todayIstStr;
+                await sendGoldGstRateMessage();
+            }
+        }
+    } catch (e) {
+        logDebug(`[11:00 AM SCHEDULER ERROR] ${e.message}`);
+    }
+}, 30000);
+
 // Start HTTP server for Render health checks and secure API proxy endpoints
 const PORT = process.env.PORT || 10000;
 http.createServer(async (req, res) => {
@@ -572,6 +733,118 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
         }
+        else if (path === '/whatsapp-qr') {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            if (isWaConnected) {
+                res.end(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head><title>WhatsApp Status</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+                    <body style="font-family: sans-serif; text-align: center; padding: 40px; background-color: #f0fdf4;">
+                        <h1 style="color: #16a34a;">✅ WhatsApp is Connected!</h1>
+                        <p style="font-size: 18px;">Connected User: <strong>${waConnectedUser || 'Active'}</strong></p>
+                        <p style="color: #4b5563;">Daily 11:00 AM GST Rate messages will be sent automatically to your selected group.</p>
+                    </body>
+                    </html>
+                `);
+            } else if (latestQrCode) {
+                try {
+                    const qrDataUrl = await QRCode.toDataURL(latestQrCode);
+                    res.end(`
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Scan WhatsApp QR Code</title>
+                            <meta name="viewport" content="width=device-width, initial-scale=1">
+                            <meta http-equiv="refresh" content="6">
+                        </head>
+                        <body style="font-family: sans-serif; text-align: center; padding: 20px; background-color: #f9fafb;">
+                            <h2 style="color: #1f2937;">Scan QR Code to Connect WhatsApp</h2>
+                            <p style="color: #6b7280; font-size: 14px;">Open WhatsApp on phone > Settings/Menu > Linked Devices > Link a Device</p>
+                            <img src="${qrDataUrl}" style="width: 280px; height: 280px; border: 4px solid #10b981; border-radius: 12px; margin: 15px 0;" />
+                            <p style="color: #9ca3af; font-size: 12px;">This page auto-refreshes every 6 seconds...</p>
+                        </body>
+                        </html>
+                    `);
+                } catch (e) {
+                    res.end(`<h3>Error generating QR Code image: ${e.message}</h3>`);
+                }
+            } else {
+                res.end(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Initializing WhatsApp...</title>
+                        <meta http-equiv="refresh" content="4">
+                    </head>
+                    <body style="font-family: sans-serif; text-align: center; padding: 40px;">
+                        <h2>Initializing WhatsApp Client...</h2>
+                        <p>Generating new QR Code. Please wait a few seconds...</p>
+                    </body>
+                    </html>
+                `);
+            }
+        }
+        else if (path === '/api/whatsapp/status') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                connected: isWaConnected,
+                user: waConnectedUser,
+                hasQr: !!latestQrCode,
+                config: loadWaConfig()
+            }));
+        }
+        else if (path === '/api/whatsapp/groups') {
+            if (!isWaConnected || !waSock) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: "WhatsApp is not connected. Scan QR code first." }));
+                return;
+            }
+            try {
+                const groupMap = await waSock.groupFetchAllParticipating();
+                const groupsList = Object.values(groupMap).map(g => ({
+                    id: g.id,
+                    subject: g.subject
+                }));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(groupsList));
+            } catch (e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        }
+        else if (path === '/api/whatsapp/config') {
+            if (req.method === 'POST') {
+                let bodyStr = '';
+                req.on('data', chunk => bodyStr += chunk);
+                req.on('end', () => {
+                    try {
+                        const newCfg = JSON.parse(bodyStr);
+                        const curr = loadWaConfig();
+                        const merged = { ...curr, ...newCfg };
+                        saveWaConfig(merged);
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: true, config: merged }));
+                    } catch (e) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: e.message }));
+                    }
+                });
+            } else {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(loadWaConfig()));
+            }
+        }
+        else if (path === '/api/whatsapp/send-now') {
+            try {
+                const result = await sendGoldGstRateMessage(query.targetGroupId || null);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            } catch (e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        }
 
         else {
             res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -600,6 +873,7 @@ async function initDatabaseIndexes() {
 // Run immediately on launch
 (async () => {
     await initDatabaseIndexes();
+    initWhatsApp();
     runSyncCycle();
 })();
 
