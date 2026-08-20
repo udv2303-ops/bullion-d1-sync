@@ -252,11 +252,14 @@ async function syncSpotAsset(assetName, yahooTicker, syncHistory = false) {
                 // Only sync the latest element for the 10-second tick
                 const idx = timestamps.length - 1;
                 if (idx >= 0) {
+                    const openVal = toDoubleSafe(quote.open[idx]);
                     const closeVal = toDoubleSafe(quote.close[idx]);
+                    const highVal = toDoubleSafe(quote.high[idx]) || closeVal;
+                    const lowVal = toDoubleSafe(quote.low[idx]) || closeVal;
                     
                     if (closeVal > 0.0) {
                         const dateStr = getIstDateString();
-                        await saveDailySummary(assetName, dateStr, closeVal, closeVal, closeVal, closeVal);
+                        await saveDailySummary(assetName, dateStr, openVal > 0 ? openVal : closeVal, highVal, lowVal, closeVal);
                         await saveIntradayTick(assetName, closeVal);
                     }
                 }
@@ -371,10 +374,13 @@ async function syncMcxAsset(assetName, pageUrl, symbolPrefix, syncHistory = fals
                 const dateStr = getIstDateString();
                 const idx = tvcData.t.length - 1;
                 if (idx >= 0) {
+                    const openVal = toDoubleSafe(tvcData.o[idx]);
                     const closeVal = toDoubleSafe(tvcData.c[idx]);
+                    const highVal = toDoubleSafe(tvcData.h[idx]) || closeVal;
+                    const lowVal = toDoubleSafe(tvcData.l[idx]) || closeVal;
 
                     if (closeVal > 0.0) {
-                        await saveDailySummary(assetName, dateStr, closeVal, closeVal, closeVal, closeVal);
+                        await saveDailySummary(assetName, dateStr, openVal > 0 ? openVal : closeVal, highVal, lowVal, closeVal);
                         await saveIntradayTick(assetName, closeVal);
                     }
                 }
@@ -419,21 +425,21 @@ async function syncHarikalaBroadcast() {
             if (name === "GOLD") {
                 // Spot Gold
                 const spotDateStr = getSpotAssetDateString();
-                await saveDailySummary("XAU_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
+                await saveDailySummary("XAU_USD", spotDateStr, openVal, highVal, lowVal, closeVal);
                 await saveIntradayTick("XAU_USD", closeVal);
                 logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} with date ${spotDateStr}`);
             }
             else if (name === "SILVER") {
                 // Spot Silver
                 const spotDateStr = getSpotAssetDateString();
-                await saveDailySummary("XAG_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
+                await saveDailySummary("XAG_USD", spotDateStr, openVal, highVal, lowVal, closeVal);
                 await saveIntradayTick("XAG_USD", closeVal);
                 logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
             }
             else if (name === "GOLD FUTURE") {
                 // MCX Gold Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
                 if (isMcxGstMarketOpen) {
-                    await saveDailySummary("GOLD_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
+                    await saveDailySummary("GOLD_MCX", dateStr, openVal, highVal, lowVal, closeVal);
                     await saveIntradayTick("GOLD_MCX", closeVal);
                     logDebug(`[HARIKALA-MCX] Synced GOLD_MCX: ${closeVal}`);
                 }
@@ -441,7 +447,7 @@ async function syncHarikalaBroadcast() {
             else if (name === "SILVER FUTURE") {
                 // MCX Silver Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
                 if (isMcxGstMarketOpen) {
-                    await saveDailySummary("SILVER_MCX", dateStr, closeVal, closeVal, closeVal, closeVal);
+                    await saveDailySummary("SILVER_MCX", dateStr, openVal, highVal, lowVal, closeVal);
                     await saveIntradayTick("SILVER_MCX", closeVal);
                     logDebug(`[HARIKALA-MCX] Synced SILVER_MCX: ${closeVal}`);
                 }
@@ -449,7 +455,7 @@ async function syncHarikalaBroadcast() {
             else if (name === "GOLD 999 IMP WITH GST (Today)") {
                 // GST Gold (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
                 if (isMcxGstMarketOpen) {
-                    await saveDailySummary("GOLD_999_GST", dateStr, closeVal, closeVal, closeVal, closeVal);
+                    await saveDailySummary("GOLD_999_GST", dateStr, openVal, highVal, lowVal, closeVal);
                     await saveIntradayTick("GOLD_999_GST", closeVal);
                     logDebug(`[HARIKALA-SPOT] Synced GOLD_999_GST: ${closeVal}`);
                 }
