@@ -158,17 +158,18 @@ function getTimestampRangeForDate(asset, dateStr) {
     const parts = dateStr.split('-');
     if (parts.length !== 3) return null;
     const year = parseInt(parts[0]);
-    const month = parseInt(parts[1]) - 1;
+    const month = parseInt(parts[1]);
     const day = parseInt(parts[2]);
     
-    const baseDateIst = new Date(Date.UTC(year, month, day, 0, 0, 0));
-    const midnightIstMs = baseDateIst.getTime() - 5.5 * 60 * 60 * 1000;
+    const mStr = month < 10 ? '0' + month : '' + month;
+    const dStr = day < 10 ? '0' + day : '' + day;
+    const midnightIstMs = new Date(`${year}-${mStr}-${dStr}T00:00:00+05:30`).getTime();
     
     let startMs = midnightIstMs;
     let endMs = midnightIstMs + 24 * 60 * 60 * 1000 - 1;
     
     if (asset === "XAU_USD" || asset === "XAG_USD") {
-        const dateForDst = new Date(midnightIstMs + 5.5 * 60 * 60 * 1000);
+        const dateForDst = new Date(midnightIstMs);
         const dst = isUsDst(dateForDst);
         const shiftMs = dst ? (2.5 * 60 * 60 * 1000) : (3.5 * 60 * 60 * 1000);
         startMs += shiftMs;
