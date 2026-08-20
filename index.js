@@ -38,7 +38,8 @@ const lastPrices = {
 // Simple D1 query wrapper
 function queryD1(sql, params = []) {
     return new Promise((resolve, reject) => {
-        const payload = JSON.stringify({ sql, params });
+        const payloadStr = JSON.stringify({ sql, params });
+        const payloadBuf = Buffer.from(payloadStr, 'utf8');
         const options = {
             hostname: 'api.cloudflare.com',
             path: `/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}/query`,
@@ -46,7 +47,7 @@ function queryD1(sql, params = []) {
             headers: {
                 'Authorization': `Bearer ${API_TOKEN}`,
                 'Content-Type': 'application/json',
-                'Content-Length': payload.length
+                'Content-Length': payloadBuf.length
             }
         };
 
@@ -73,7 +74,7 @@ function queryD1(sql, params = []) {
             logDebug(`D1 Request Network Error: ${e.message}`);
             reject(e);
         });
-        req.write(payload);
+        req.write(payloadBuf);
         req.end();
     });
 }
