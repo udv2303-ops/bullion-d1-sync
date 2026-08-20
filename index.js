@@ -770,9 +770,23 @@ http.createServer(async (req, res) => {
                         </div>
                         
                         <p class="status" id="statusText">Generating Live QR Code...</p>
+                        
+                        <div style="margin-top: 20px;">
+                            <button onclick="resetWaSession()" style="background: #ef4444; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px;">🔄 Generate Fresh QR Code</button>
+                        </div>
                     </div>
 
                     <script>
+                        async function resetWaSession() {
+                            document.getElementById('statusText').innerText = "Resetting session & generating new QR...";
+                            try {
+                                await fetch('/api/whatsapp/reset');
+                                setTimeout(updateQr, 2000);
+                            } catch(e) {
+                                alert("Reset failed: " + e.message);
+                            }
+                        }
+
                         async function updateQr() {
                             try {
                                 const res = await fetch('/api/whatsapp/qr-data');
@@ -784,6 +798,7 @@ http.createServer(async (req, res) => {
                                         <h1 style="color: #16a34a; margin-top: 10px;">✅ WhatsApp Connected!</h1>
                                         <p style="font-size: 16px; color: #374151;">User: <strong>\${data.user || 'Active'}</strong></p>
                                         <p style="color: #6b7280; font-size: 13px;">Daily 11:00 AM GST Rate messages will auto-send to your target group.</p>
+                                        <button onclick="resetWaSession()" style="background: #dc2626; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; margin-top: 15px;">Disconnect / Unlink WhatsApp</button>
                                     \`;
                                 } else if (data.qr) {
                                     const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(data.qr);
@@ -793,7 +808,7 @@ http.createServer(async (req, res) => {
                                     }
                                     document.getElementById('statusText').innerText = "Live QR Code • Ready to Scan";
                                 } else {
-                                    document.getElementById('statusText').innerText = "Waiting for new QR code...";
+                                    document.getElementById('statusText').innerText = "Waiting for new QR code... (Click 'Generate Fresh QR Code' if stuck)";
                                 }
                             } catch (e) {
                                 console.error(e);
@@ -805,6 +820,23 @@ http.createServer(async (req, res) => {
                 </body>
                 </html>
             `);
+        }
+        else if (path === '/api/whatsapp/reset') {
+            logDebug('[WA RESET] Resetting session auth data and generating fresh QR code...');
+            isWaConnected = false;
+            latestQrCode = null;
+            waConnectedUser = null;
+            try {
+                if (waSock) {
+                    try { waSock.end(new Error("Manual Reset")); } catch (e) {}
+                }
+                fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
+            } catch (e) {
+                logDebug(`[WA RESET ERROR] ${e.message}`);
+            }
+            setTimeout(initWhatsApp, 1000);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: "WhatsApp session reset. Generating new QR code..." }));
         }
         else if (path === '/api/whatsapp/qr-data') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
