@@ -726,37 +726,59 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     return { success: true, groupId, messageText };
 }
 
+function getIstTimeInfo() {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+    const parts = formatter.formatToParts(now);
+    const p = {};
+    parts.forEach(item => { p[item.type] = item.value; });
+    
+    let hourStr = p.hour === '24' ? '00' : p.hour;
+    const timeFormatted = `${hourStr}:${p.minute}`;
+    const todayIstStr = `${p.year}-${p.month}-${p.day}`;
+
+    const dayFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+    const isSunday = dayFormatter.format(now) === 'Sun';
+
+    return { timeFormatted, todayIstStr, isSunday, seconds: p.second };
+}
+
 // Configurable Daily WhatsApp Auto-Sender Loop
-let lastSentWaDate = "";
+let lastSentWaKey = "";
 
 setInterval(async () => {
     try {
-        const nowIstStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
-        const nowIst = new Date(nowIstStr);
-        const hours = String(nowIst.getHours()).padStart(2, '0');
-        const minutes = String(nowIst.getMinutes()).padStart(2, '0');
-        const currentTimeFormatted = `${hours}:${minutes}`;
-        const dayOfWeek = nowIst.getDay(); // 0 = Sunday
-        const todayIstStr = `${nowIst.getFullYear()}-${String(nowIst.getMonth() + 1).padStart(2, '0')}-${String(nowIst.getDate()).padStart(2, '0')}`;
-
+        const { timeFormatted, todayIstStr, isSunday } = getIstTimeInfo();
         const config = loadWaConfig();
+
         if (config.autoSendEnabled && config.targetGroupId && isWaConnected) {
             // Check Sunday Exception
-            if (config.skipSunday && dayOfWeek === 0) {
+            if (config.skipSunday && isSunday) {
                 return; // Do not auto-send on Sundays!
             }
 
             const targetTime = config.autoSendTime || '11:00';
-            if (currentTimeFormatted === targetTime && lastSentWaDate !== todayIstStr) {
-                logDebug(`[WA SCHEDULER] Triggering scheduled WhatsApp rate send at ${currentTimeFormatted} IST...`);
-                lastSentWaDate = todayIstStr;
+            const sendKey = `${todayIstStr}_${targetTime}`;
+
+            if (timeFormatted === targetTime && lastSentWaKey !== sendKey) {
+                logDebug(`[WA SCHEDULER] ⏰ Triggering scheduled WhatsApp rate send at ${timeFormatted} IST (Target: ${targetTime})...`);
+                lastSentWaKey = sendKey;
                 await sendGoldGstRateMessage();
             }
         }
     } catch (e) {
         logDebug(`[WA SCHEDULER ERROR] ${e.message}`);
     }
-}, 30000);
+}, 10000);
 
 // Start HTTP server for Render health checks and secure API proxy endpoints
 const PORT = process.env.PORT || 10000;
@@ -1008,11 +1030,16 @@ http.createServer(async (req, res) => {
             }));
         }
         else if (path === '/api/whatsapp/status') {
+            const istInfo = getIstTimeInfo();
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 connected: isWaConnected,
                 user: waConnectedUser,
                 hasQr: !!latestQrCode,
+                istTime: istInfo.timeFormatted,
+                istDate: istInfo.todayIstStr,
+                isSunday: istInfo.isSunday,
+                lastSentWaKey,
                 config: loadWaConfig()
             }));
         }
