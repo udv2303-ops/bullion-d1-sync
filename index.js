@@ -545,11 +545,29 @@ let lastSent11AmDate = '';
 
 const WA_CONFIG_FILE = path.join(__dirname, 'whatsapp_config.json');
 
+const DEFAULT_WA_TEMPLATE = `⭐ *HARIKALA BULLION LLP* ⭐
+
+{RATES}
+
+*FOR BOOKING*
+☎️:-0261-2564900
+☎️:-0261-2564901
+📱:-9978593937
+📱:-9925593937
+
+👇 *Visit for live rate* 👇 
+
+Website :- www.harikalabullion.com
+
+Play Store :- https://play.google.com/store/apps/details?id=com.chirayusoft.harikalabullion
+
+App store :- https://apps.apple.com/in/app/harikala-bullion/id1518372373`;
+
 function loadWaConfig() {
     let cfg = {
         targetGroupId: '',
         customHeader: '⭐ *HARIKALA BULLION LLP* ⭐',
-        customTemplate: '',
+        customTemplate: DEFAULT_WA_TEMPLATE,
         autoSendEnabled: true,
         autoSendTime: '11:00',
         skipSunday: true,
@@ -561,7 +579,7 @@ function loadWaConfig() {
             cfg = {
                 targetGroupId: parsed.targetGroupId || '',
                 customHeader: parsed.customHeader || '⭐ *HARIKALA BULLION LLP* ⭐',
-                customTemplate: parsed.customTemplate || '',
+                customTemplate: parsed.customTemplate || DEFAULT_WA_TEMPLATE,
                 autoSendEnabled: parsed.autoSendEnabled !== undefined ? parsed.autoSendEnabled : (parsed.autoSend11Am !== undefined ? parsed.autoSend11Am : true),
                 autoSendTime: parsed.autoSendTime || '11:00',
                 skipSunday: parsed.skipSunday !== undefined ? parsed.skipSunday : true,
@@ -700,13 +718,8 @@ async function sendGoldGstRateMessage(customGroupId = null) {
 
     const ratesBlockText = ratesLines.join('\n\n');
 
-    let messageText = '';
-    if (config.customTemplate && config.customTemplate.trim().length > 0) {
-        messageText = config.customTemplate.replace('{RATES}', ratesBlockText);
-    } else {
-        const header = config.customHeader || '⭐ *HARIKALA BULLION LLP* ⭐';
-        messageText = `${header}\n\n${ratesBlockText}\n\n*FOR BOOKING*\n☎️:-0261-2564900\n☎️:-0261-2564901\n📱:-9978593937\n📱:-9925593937\n\n👇 *Visit for live rate* 👇 \n\nWebsite :- www.harikalabullion.com\n\nPlay Store :- https://play.google.com/store/apps/details?id=com.chirayusoft.harikalabullion\n\nApp store :- https://apps.apple.com/in/app/harikala-bullion/id1518372373`;
-    }
+    let template = config.customTemplate && config.customTemplate.trim().length > 0 ? config.customTemplate : DEFAULT_WA_TEMPLATE;
+    const messageText = template.includes('{RATES}') ? template.replace('{RATES}', ratesBlockText) : `${template}\n\n${ratesBlockText}`;
 
     await waSock.sendMessage(groupId, { text: messageText });
     logDebug(`[WA SENT] Successfully sent WhatsApp Rate Message to ${groupId}`);
