@@ -688,13 +688,18 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     const config = loadWaConfig();
     let targetIds = [];
 
-    if (customGroupId) {
-        targetIds = [customGroupId];
-    } else if (Array.isArray(config.targetGroupIds) && config.targetGroupIds.length > 0) {
-        targetIds = config.targetGroupIds;
+    if (Array.isArray(config.targetGroupIds) && config.targetGroupIds.length > 0) {
+        targetIds = [...config.targetGroupIds];
     } else if (config.targetGroupId) {
         targetIds = [config.targetGroupId];
     }
+
+    if (customGroupId && !targetIds.includes(customGroupId)) {
+        targetIds.push(customGroupId);
+    }
+
+    // Filter out empty and deduplicate
+    targetIds = Array.from(new Set(targetIds.filter(id => !!id)));
 
     if (!isWaConnected || !waSock) {
         throw new Error("WhatsApp client is not connected. Please scan QR code at /whatsapp-qr first.");
@@ -756,18 +761,21 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     const messageText = template.includes('{RATES}') ? template.replace('{RATES}', ratesBlockText) : `${template}\n\n${ratesBlockText}`;
 
     const sendResults = [];
+    logWa(`[WA BROADCAST] Dispatching rate message to ${targetIds.length} target group(s): ${JSON.stringify(targetIds)}`);
+
     for (const gid of targetIds) {
+        const formattedJid = gid.includes('@') ? gid : `${gid}@g.us`;
         try {
-            await waSock.sendMessage(gid, { text: messageText });
-            logWa(`[WA SENT] Successfully sent WhatsApp Rate Message to ${gid}`);
-            sendResults.push({ groupId: gid, success: true });
+            await waSock.sendMessage(formattedJid, { text: messageText });
+            logWa(`[WA SENT SUCCESS] Sent to group: ${formattedJid}`);
+            sendResults.push({ groupId: formattedJid, success: true });
         } catch (err) {
-            logWa(`[WA SEND ERROR ${gid}] ${err.message}`);
-            sendResults.push({ groupId: gid, success: false, error: err.message });
+            logWa(`[WA SEND ERROR] Failed to send to group ${formattedJid}: ${err.message}`);
+            sendResults.push({ groupId: formattedJid, success: false, error: err.message });
         }
     }
 
-    return { success: sendResults.some(r => r.success), sendResults, messageText };
+    return { success: sendResults.some(r => r.success), targetCount: targetIds.length, sendResults, messageText };
 }
 
 function normalizeTimeStr(tStr) {
