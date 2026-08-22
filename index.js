@@ -240,7 +240,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
 
         if (rows.length > 0) {
             const existing = rows[0];
-            const updatedOpen = existing.open > 0 ? existing.open : open;
+            const updatedOpen = (asset === "XAU_USD" || asset === "XAG_USD") ? open : (existing.open > 0 ? existing.open : open);
             const updatedHigh = (asset === "XAU_USD" || asset === "XAG_USD") ? Math.max(targetHigh, close) : Math.max(existing.high || 0.0, targetHigh);
             const updatedLow = (asset === "XAU_USD" || asset === "XAG_USD") ? Math.min(targetLow, close) : Math.min(existing.low || close, targetLow);
 
@@ -741,12 +741,12 @@ http.createServer(async (req, res) => {
             const range = getTimestampRangeForDate("XAU_USD", spotDate);
             if (range) {
                 await queryD1(
-                    "UPDATE prices SET high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND timestamp >= ?) WHERE asset = 'XAU_USD' AND date = ?",
-                    [range.startMs, range.startMs, spotDate]
+                    "UPDATE prices SET open = (SELECT CAST(price AS REAL) FROM intraday_prices WHERE asset = 'XAU_USD' AND CAST(timestamp AS INTEGER) >= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1), high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND CAST(timestamp AS INTEGER) >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND CAST(timestamp AS INTEGER) >= ?) WHERE asset = 'XAU_USD' AND date = ?",
+                    [range.startMs, range.startMs, range.startMs, spotDate]
                 );
                 await queryD1(
-                    "UPDATE prices SET high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND timestamp >= ?) WHERE asset = 'XAG_USD' AND date = ?",
-                    [range.startMs, range.startMs, spotDate]
+                    "UPDATE prices SET open = (SELECT CAST(price AS REAL) FROM intraday_prices WHERE asset = 'XAG_USD' AND CAST(timestamp AS INTEGER) >= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1), high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND CAST(timestamp AS INTEGER) >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND CAST(timestamp AS INTEGER) >= ?) WHERE asset = 'XAG_USD' AND date = ?",
+                    [range.startMs, range.startMs, range.startMs, spotDate]
                 );
             }
             const dbRes = await queryD1(
