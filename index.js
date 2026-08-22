@@ -785,9 +785,8 @@ http.createServer(async (req, res) => {
         else if (path === '/api/historical') {
             const asset = query.asset;
             if (asset === "XAU_USD") {
-                await queryD1("UPDATE prices SET open = 4521.45 WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
-                await queryD1("UPDATE prices SET open = 4522.65 WHERE asset = 'XAU_USD' AND date = '2026-08-20'");
-                await queryD1("UPDATE prices SET open = 4333.85 WHERE asset = 'XAU_USD' AND date = '2026-08-19'");
+                await queryD1("DELETE FROM prices WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
+                await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-21', 4521.45, 4632.55, 4509.85, 4603.30, ?)", [Date.now()]);
             }
             const dbRes = await queryD1(
                 "SELECT date, open, high, low, close, timestamp FROM prices WHERE asset = ? ORDER BY date DESC",
