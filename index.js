@@ -765,6 +765,14 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ range21, ticks: res21.result?.[0]?.results }));
         }
+        else if (path === '/api/fix-open') {
+            await queryD1("UPDATE prices SET open = 4521.45 WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
+            await queryD1("UPDATE prices SET open = 4522.65 WHERE asset = 'XAU_USD' AND date = '2026-08-20'");
+            await queryD1("UPDATE prices SET open = 4333.85 WHERE asset = 'XAU_USD' AND date = '2026-08-19'");
+            const updated = await queryD1("SELECT * FROM prices WHERE asset = 'XAU_USD' AND date IN ('2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22')");
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(updated));
+        }
         else if (path === '/api/debug-sync') {
             await syncHarikalaBroadcast();
             const dbRes = await queryD1(
