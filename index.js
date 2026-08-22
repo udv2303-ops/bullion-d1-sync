@@ -546,14 +546,28 @@ let lastSent11AmDate = '';
 const WA_CONFIG_FILE = path.join(__dirname, 'whatsapp_config.json');
 
 function loadWaConfig() {
+    let cfg = {
+        targetGroupId: '',
+        customHeader: '🏆 *GOLD 999 WITH GST RATE* 🏆',
+        autoSendEnabled: true,
+        autoSendTime: '11:00',
+        skipSunday: true
+    };
     try {
         if (fs.existsSync(WA_CONFIG_FILE)) {
-            return JSON.parse(fs.readFileSync(WA_CONFIG_FILE, 'utf8'));
+            const parsed = JSON.parse(fs.readFileSync(WA_CONFIG_FILE, 'utf8'));
+            cfg = {
+                targetGroupId: parsed.targetGroupId || '',
+                customHeader: parsed.customHeader || '🏆 *GOLD 999 WITH GST RATE* 🏆',
+                autoSendEnabled: parsed.autoSendEnabled !== undefined ? parsed.autoSendEnabled : (parsed.autoSend11Am !== undefined ? parsed.autoSend11Am : true),
+                autoSendTime: parsed.autoSendTime || '11:00',
+                skipSunday: parsed.skipSunday !== undefined ? parsed.skipSunday : true
+            };
         }
     } catch (e) {
         logDebug(`[WA CONFIG READ ERROR] ${e.message}`);
     }
-    return { targetGroupId: '', customHeader: '🏆 *GOLD 999 WITH GST RATE* 🏆', autoSend11Am: true };
+    return cfg;
 }
 
 function saveWaConfig(cfg) {
@@ -696,30 +710,39 @@ Play Store :- https://play.google.com/store/apps/details?id=com.chirayusoft.hari
 App store :- https://apps.apple.com/in/app/harikala-bullion/id1518372373`;
 
     await waSock.sendMessage(groupId, { text: messageText });
-    logDebug(`[WA SENT] Successfully sent 11:00 AM GST Rate Message to ${groupId}`);
+    logDebug(`[WA SENT] Successfully sent GST Rate Message to ${groupId}`);
     return { success: true, groupId, messageText };
 }
 
-// 11:00 AM IST Auto-Sender Loop
+// Configurable Daily WhatsApp Auto-Sender Loop
+let lastSentWaDate = "";
+
 setInterval(async () => {
     try {
         const nowIstStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
         const nowIst = new Date(nowIstStr);
-        const hours = nowIst.getHours();
-        const minutes = nowIst.getMinutes();
+        const hours = String(nowIst.getHours()).padStart(2, '0');
+        const minutes = String(nowIst.getMinutes()).padStart(2, '0');
+        const currentTimeFormatted = `${hours}:${minutes}`;
+        const dayOfWeek = nowIst.getDay(); // 0 = Sunday
         const todayIstStr = `${nowIst.getFullYear()}-${String(nowIst.getMonth() + 1).padStart(2, '0')}-${String(nowIst.getDate()).padStart(2, '0')}`;
 
-        // Trigger at 11:00 AM IST
-        if (hours === 11 && minutes === 0 && lastSent11AmDate !== todayIstStr) {
-            const config = loadWaConfig();
-            if (config.autoSend11Am && config.targetGroupId && isWaConnected) {
-                logDebug(`[11:00 AM SCHEDULER] Triggering daily WhatsApp rate send...`);
-                lastSent11AmDate = todayIstStr;
+        const config = loadWaConfig();
+        if (config.autoSendEnabled && config.targetGroupId && isWaConnected) {
+            // Check Sunday Exception
+            if (config.skipSunday && dayOfWeek === 0) {
+                return; // Do not auto-send on Sundays!
+            }
+
+            const targetTime = config.autoSendTime || '11:00';
+            if (currentTimeFormatted === targetTime && lastSentWaDate !== todayIstStr) {
+                logDebug(`[WA SCHEDULER] Triggering scheduled WhatsApp rate send at ${currentTimeFormatted} IST...`);
+                lastSentWaDate = todayIstStr;
                 await sendGoldGstRateMessage();
             }
         }
     } catch (e) {
-        logDebug(`[11:00 AM SCHEDULER ERROR] ${e.message}`);
+        logDebug(`[WA SCHEDULER ERROR] ${e.message}`);
     }
 }, 30000);
 
