@@ -208,8 +208,17 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         if (asset === "XAU_USD" || asset === "XAG_USD") {
             const range = getTimestampRangeForDate(asset, dateStr);
             if (range) {
+                const firstTickRes = await queryD1(
+                    "SELECT CAST(price AS REAL) as price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1",
+                    [asset, range.startMs, range.endMs]
+                );
+                const firstRow = firstTickRes.result?.[0]?.results?.[0];
+                if (firstRow && firstRow.price > 0) {
+                    open = firstRow.price;
+                }
+
                 const tickRes = await queryD1(
-                    "SELECT MAX(CAST(price AS REAL)) as max_price, MIN(CAST(price AS REAL)) as min_price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ?",
+                    "SELECT MAX(CAST(price AS REAL)) as max_price, MIN(CAST(price AS REAL)) as min_price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ?",
                     [asset, range.startMs, range.endMs]
                 );
                 const tickRow = tickRes.result?.[0]?.results?.[0];
@@ -1019,7 +1028,7 @@ async function recalculateLast3DaysSpotOHLC() {
                 if (!range) continue;
                 
                 const ticksRes = await queryD1(
-                    "SELECT CAST(price AS REAL) as price, timestamp FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+                    "SELECT CAST(price AS REAL) as price, CAST(timestamp AS INTEGER) as ts FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ? ORDER BY CAST(timestamp AS INTEGER) ASC",
                     [asset, range.startMs, range.endMs]
                 );
                 const ticks = ticksRes.result?.[0]?.results || [];
