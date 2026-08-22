@@ -1019,6 +1019,7 @@ http.createServer(async (req, res) => {
 async function recalculateLast3DaysSpotOHLC() {
     try {
         logDebug("Recalculating last 3 days Spot OHLC based on 3:31 AM IST cycle...");
+        await queryD1("DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND date IN ('2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22')");
         const assets = ["XAU_USD", "XAG_USD"];
         const dates = ["2026-08-19", "2026-08-20", "2026-08-21", "2026-08-22"];
         
@@ -1041,20 +1042,11 @@ async function recalculateLast3DaysSpotOHLC() {
                         if (t.price > highVal) highVal = t.price;
                         if (t.price < lowVal) lowVal = t.price;
                     }
-                    const check = await queryD1("SELECT id FROM prices WHERE asset = ? AND date = ?", [asset, dateStr]);
-                    const existingRows = check.result?.[0]?.results || [];
-                    if (existingRows.length > 0) {
-                        await queryD1(
-                            "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
-                            [openVal, highVal, lowVal, closeVal, Date.now(), existingRows[0].id]
-                        );
-                    } else {
-                        await queryD1(
-                            "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            [asset, dateStr, openVal, highVal, lowVal, closeVal, Date.now()]
-                        );
-                    }
-                    logDebug(`[RECALC] Updated ${asset} for ${dateStr}: O:${openVal} H:${highVal} L:${lowVal} C:${closeVal}`);
+                    await queryD1(
+                        "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        [asset, dateStr, openVal, highVal, lowVal, closeVal, Date.now()]
+                    );
+                    logDebug(`[RECALC] Recreated ${asset} for ${dateStr}: O:${openVal} H:${highVal} L:${lowVal} C:${closeVal}`);
                 }
             }
         }
