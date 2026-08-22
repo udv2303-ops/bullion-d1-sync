@@ -688,52 +688,31 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     const config = loadWaConfig();
     let targetIds = [];
 
-    if (Array.isArray(config.targetGroupIds) && config.targetGroupIds.length > 0) {
+    if (customGroupId && customGroupId.trim().length > 0) {
+        targetIds = [customGroupId.trim()];
+    } else if (Array.isArray(config.targetGroupIds) && config.targetGroupIds.length > 0) {
         targetIds = config.targetGroupIds.map(id => (typeof id === 'string' ? id.trim() : '')).filter(id => id.length > 0);
-    } else if (config.targetGroupId) {
+    } else if (config.targetGroupId && config.targetGroupId.trim().length > 0) {
         targetIds = [config.targetGroupId.trim()];
     }
 
-    if (customGroupId && customGroupId.trim().length > 0) {
-        const cleanCustom = customGroupId.trim();
-        if (!targetIds.includes(cleanCustom)) {
-            targetIds.push(cleanCustom);
+    targetIds = Array.from(new Set(targetIds));
+
+    if (!isWaConnected || !waSock) {
+        throw new Error("WhatsApp client is not connected. Scan QR code first.");
+    }
+
+    if (targetIds.length === 0) {
+        try {
+            const groupMap = await waSock.groupFetchAllParticipating();
+            targetIds = Object.keys(groupMap);
+        } catch (ge) {
+            logWa(`[WA GROUP FETCH WARNING] ${ge.message}`);
         }
     }
 
-    // Filter out empty and deduplicate
-    targetIds = Array.from(new Set(targetIds.filter(id => !!id)));
-
-    if (!isWaConnected || !waSock) {
-        throw new Error("WhatsApp client is not connected. Please scan QR code at /whatsapp-qr first.");
-    }
-
-    // Fetch live participating groups to filter out invalid or Community parent containers
-    let validGroupMap = {};
-    try {
-        validGroupMap = await waSock.groupFetchAllParticipating();
-    } catch (ge) {
-        logWa(`[WA GROUP FETCH WARNING] ${ge.message}`);
-    }
-
-    const validGroupIds = new Set(
-        Object.values(validGroupMap)
-            .filter(g => !g.isCommunity) // Filter out Community Parent containers
-            .map(g => g.id)
-    );
-
-    // If targetIds are specified, keep only those present in validGroupIds
-    let filteredTargets = targetIds.filter(id => validGroupIds.has(id));
-
-    if (filteredTargets.length === 0 && Object.keys(validGroupMap).length > 0) {
-        filteredTargets = Array.from(validGroupIds);
-        logWa(`[WA AUTO GROUP] Filtered targets were empty, defaulting to all valid active groups (${filteredTargets.length})`);
-    }
-
-    targetIds = filteredTargets;
-
     if (targetIds.length === 0) {
-        throw new Error("No valid target WhatsApp Group ID found. Select target group in app or API.");
+        throw new Error("No target WhatsApp Group ID configured. Select target group in app or API.");
     }
 
     const selectedScripts = config.selectedScripts || ['GOLD_999_GST'];
