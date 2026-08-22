@@ -689,13 +689,16 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     let targetIds = [];
 
     if (Array.isArray(config.targetGroupIds) && config.targetGroupIds.length > 0) {
-        targetIds = [...config.targetGroupIds];
+        targetIds = config.targetGroupIds.map(id => (typeof id === 'string' ? id.trim() : '')).filter(id => id.length > 0);
     } else if (config.targetGroupId) {
-        targetIds = [config.targetGroupId];
+        targetIds = [config.targetGroupId.trim()];
     }
 
-    if (customGroupId && !targetIds.includes(customGroupId)) {
-        targetIds.push(customGroupId);
+    if (customGroupId && customGroupId.trim().length > 0) {
+        const cleanCustom = customGroupId.trim();
+        if (!targetIds.includes(cleanCustom)) {
+            targetIds.push(cleanCustom);
+        }
     }
 
     // Filter out empty and deduplicate
