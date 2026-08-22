@@ -1175,8 +1175,9 @@ http.createServer(async (req, res) => {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result));
             } catch (e) {
+                logWa(`[WA SEND-NOW ERROR STACK] ${e.stack || e.message}`);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: e.message }));
+                res.end(JSON.stringify({ error: e.message, stack: e.stack }));
             }
         }
 
