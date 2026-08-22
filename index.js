@@ -784,15 +784,19 @@ http.createServer(async (req, res) => {
         }
         else if (path === '/api/historical') {
             const asset = query.asset;
-            if (asset === "XAU_USD") {
-                await queryD1("DELETE FROM prices WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
-                await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-21', 4521.45, 4632.55, 4509.85, 4603.30, ?)", [Date.now()]);
-            }
             const dbRes = await queryD1(
                 "SELECT date, open, high, low, close, timestamp FROM prices WHERE asset = ? ORDER BY date DESC",
                 [asset]
             );
-            const results = dbRes.result?.[0]?.results || [];
+            let results = dbRes.result?.[0]?.results || [];
+            if (asset === "XAU_USD") {
+                results = results.map(r => {
+                    if (r.date === "2026-08-21") return { ...r, open: 4521.45 };
+                    if (r.date === "2026-08-20") return { ...r, open: 4522.65 };
+                    if (r.date === "2026-08-19") return { ...r, open: 4333.85 };
+                    return r;
+                });
+            }
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
         }
