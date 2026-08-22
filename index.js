@@ -669,10 +669,20 @@ async function initWhatsApp() {
 
 async function sendGoldGstRateMessage(customGroupId = null) {
     const config = loadWaConfig();
-    const groupId = customGroupId || config.targetGroupId;
+    let groupId = customGroupId || config.targetGroupId;
 
     if (!isWaConnected || !waSock) {
         throw new Error("WhatsApp client is not connected. Please scan QR code at /whatsapp-qr first.");
+    }
+    if (!groupId) {
+        try {
+            const groupMap = await waSock.groupFetchAllParticipating();
+            const groups = Object.keys(groupMap);
+            if (groups.length > 0) {
+                groupId = groups[0];
+                logDebug(`[WA AUTO GROUP] Target group was empty, auto-selected first group: ${groupId} (${groupMap[groupId]?.subject})`);
+            }
+        } catch (ge) {}
     }
     if (!groupId) {
         throw new Error("No target WhatsApp Group ID configured. Select target group in app or API.");
@@ -760,7 +770,7 @@ setInterval(async () => {
         const { timeFormatted, todayIstStr, isSunday } = getIstTimeInfo();
         const config = loadWaConfig();
 
-        if (config.autoSendEnabled && config.targetGroupId && isWaConnected) {
+        if (config.autoSendEnabled && isWaConnected) {
             // Check Sunday Exception
             if (config.skipSunday && isSunday) {
                 return; // Do not auto-send on Sundays!
