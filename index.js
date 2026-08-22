@@ -548,20 +548,24 @@ const WA_CONFIG_FILE = path.join(__dirname, 'whatsapp_config.json');
 function loadWaConfig() {
     let cfg = {
         targetGroupId: '',
-        customHeader: '🏆 *GOLD 999 WITH GST RATE* 🏆',
+        customHeader: '⭐ *HARIKALA BULLION LLP* ⭐',
+        customTemplate: '',
         autoSendEnabled: true,
         autoSendTime: '11:00',
-        skipSunday: true
+        skipSunday: true,
+        selectedScripts: ['GOLD_999_GST']
     };
     try {
         if (fs.existsSync(WA_CONFIG_FILE)) {
             const parsed = JSON.parse(fs.readFileSync(WA_CONFIG_FILE, 'utf8'));
             cfg = {
                 targetGroupId: parsed.targetGroupId || '',
-                customHeader: parsed.customHeader || '🏆 *GOLD 999 WITH GST RATE* 🏆',
+                customHeader: parsed.customHeader || '⭐ *HARIKALA BULLION LLP* ⭐',
+                customTemplate: parsed.customTemplate || '',
                 autoSendEnabled: parsed.autoSendEnabled !== undefined ? parsed.autoSendEnabled : (parsed.autoSend11Am !== undefined ? parsed.autoSend11Am : true),
                 autoSendTime: parsed.autoSendTime || '11:00',
-                skipSunday: parsed.skipSunday !== undefined ? parsed.skipSunday : true
+                skipSunday: parsed.skipSunday !== undefined ? parsed.skipSunday : true,
+                selectedScripts: Array.isArray(parsed.selectedScripts) && parsed.selectedScripts.length > 0 ? parsed.selectedScripts : ['GOLD_999_GST']
             };
         }
     } catch (e) {
@@ -656,61 +660,56 @@ async function sendGoldGstRateMessage(customGroupId = null) {
         throw new Error("No target WhatsApp Group ID configured. Select target group in app or API.");
     }
 
-    let gstPrice = lastPrices["GOLD_999_GST"] || 0.0;
-    let openPrice = gstPrice;
-    let highPrice = gstPrice;
-    let lowPrice = gstPrice;
-    let dateStr = getIstDateString();
-
-    try {
-        const dbRes = await queryD1(
-            "SELECT * FROM prices WHERE asset = ? ORDER BY date DESC LIMIT 1",
-            ["GOLD_999_GST"]
-        );
-        const rows = dbRes?.result?.[0]?.results || [];
-        if (rows.length > 0) {
-            const row = rows[0];
-            if (row.close > 0) gstPrice = row.close;
-            if (row.open > 0) openPrice = row.open;
-            if (row.high > 0) highPrice = row.high;
-            if (row.low > 0) lowPrice = row.low;
-            if (row.date) dateStr = row.date;
+    const selectedScripts = config.selectedScripts || ['GOLD_999_GST'];
+    
+    // Fetch latest prices for selected scripts
+    const pricesMap = {};
+    for (const script of selectedScripts) {
+        let price = lastPrices[script] || 0.0;
+        try {
+            const dbRes = await queryD1(
+                "SELECT close FROM prices WHERE asset = ? ORDER BY date DESC LIMIT 1",
+                [script]
+            );
+            const rows = dbRes?.result?.[0]?.results || [];
+            if (rows.length > 0 && rows[0].close > 0) {
+                price = rows[0].close;
+            }
+        } catch (e) {
+            logDebug(`[WA RATE FETCH WARNING ${script}] ${e.message}`);
         }
-    } catch (e) {
-        logDebug(`[WA RATE FETCH WARNING] ${e.message}`);
+        pricesMap[script] = price;
     }
 
-    const timeStr = new Date().toLocaleTimeString("en-US", {
-        timeZone: "Asia/Kolkata",
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true
+    // Format rates block
+    const ratesLines = [];
+    selectedScripts.forEach(script => {
+        const val = pricesMap[script] || 0;
+        if (script === 'GOLD_999_GST') {
+            ratesLines.push(`*999 (100 GM BAR)*\n🟡 *RTGS :- ${Math.round(val)}*`);
+        } else if (script === 'XAU_USD') {
+            ratesLines.push(`🟡 *Spot Gold :- $${val.toFixed(2)}*`);
+        } else if (script === 'XAG_USD') {
+            ratesLines.push(`⚪ *Spot Silver :- $${val.toFixed(4)}*`);
+        } else if (script === 'GOLD_MCX') {
+            ratesLines.push(`🟡 *Gold MCX :- ₹${Math.round(val)}*`);
+        } else if (script === 'SILVER_MCX') {
+            ratesLines.push(`⚪ *Silver MCX :- ₹${Math.round(val)}*`);
+        }
     });
 
-    const roundedRate = Math.round(gstPrice);
+    const ratesBlockText = ratesLines.join('\n\n');
 
-    const messageText = 
-`⭐ *HARIKALA BULLION LLP* ⭐
-
-*999 (100 GM BAR)*
-🟡 *RTGS :- ${roundedRate}*
-
-*FOR BOOKING*
-☎️:-0261-2564900
-☎️:-0261-2564901
-📱:-9978593937
-📱:-9925593937
-
-👇 *Visit for live rate* 👇 
-
-Website :- www.harikalabullion.com
-
-Play Store :- https://play.google.com/store/apps/details?id=com.chirayusoft.harikalabullion
-
-App store :- https://apps.apple.com/in/app/harikala-bullion/id1518372373`;
+    let messageText = '';
+    if (config.customTemplate && config.customTemplate.trim().length > 0) {
+        messageText = config.customTemplate.replace('{RATES}', ratesBlockText);
+    } else {
+        const header = config.customHeader || '⭐ *HARIKALA BULLION LLP* ⭐';
+        messageText = `${header}\n\n${ratesBlockText}\n\n*FOR BOOKING*\n☎️:-0261-2564900\n☎️:-0261-2564901\n📱:-9978593937\n📱:-9925593937\n\n👇 *Visit for live rate* 👇 \n\nWebsite :- www.harikalabullion.com\n\nPlay Store :- https://play.google.com/store/apps/details?id=com.chirayusoft.harikalabullion\n\nApp store :- https://apps.apple.com/in/app/harikala-bullion/id1518372373`;
+    }
 
     await waSock.sendMessage(groupId, { text: messageText });
-    logDebug(`[WA SENT] Successfully sent GST Rate Message to ${groupId}`);
+    logDebug(`[WA SENT] Successfully sent WhatsApp Rate Message to ${groupId}`);
     return { success: true, groupId, messageText };
 }
 
