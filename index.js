@@ -1131,10 +1131,12 @@ http.createServer(async (req, res) => {
             }
             try {
                 const groupMap = await waSock.groupFetchAllParticipating();
-                const groupsList = Object.values(groupMap).map(g => ({
-                    id: g.id,
-                    subject: g.subject
-                }));
+                const groupsList = Object.values(groupMap)
+                    .filter(g => !g.isCommunity) // Exclude Community parent containers that cannot receive direct chat messages
+                    .map(g => ({
+                        id: g.id,
+                        subject: g.subject || 'Unnamed Group'
+                    }));
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(groupsList));
             } catch (e) {
@@ -1166,7 +1168,8 @@ http.createServer(async (req, res) => {
         }
         else if (path === '/api/whatsapp/send-now') {
             try {
-                const result = await sendGoldGstRateMessage(query.targetGroupId || null);
+                const targetOverride = (query.targetGroupId && query.targetGroupId.trim().length > 0) ? query.targetGroupId.trim() : null;
+                const result = await sendGoldGstRateMessage(targetOverride);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result));
             } catch (e) {
