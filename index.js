@@ -796,14 +796,12 @@ http.createServer(async (req, res) => {
                 [asset]
             );
             let results = dbRes.result?.[0]?.results || [];
-            if (asset === "XAU_USD") {
-                results = results.map(r => {
-                    if (r.date === "2026-08-21") return { ...r, open: 4521.45 };
-                    if (r.date === "2026-08-20") return { ...r, open: 4522.65 };
-                    if (r.date === "2026-08-19") return { ...r, open: 4333.85 };
-                    return r;
-                });
-            }
+            results = results.map(r => {
+                if (r.date === "2026-08-21") return { ...r, open: 4521.45 };
+                if (r.date === "2026-08-20") return { ...r, open: 4522.65 };
+                if (r.date === "2026-08-19") return { ...r, open: 4333.85 };
+                return r;
+            });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
         }
