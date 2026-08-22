@@ -575,6 +575,7 @@ App store :- https://apps.apple.com/in/app/harikala-bullion/id1518372373`;
 function loadWaConfig() {
     let cfg = {
         targetGroupId: '',
+        targetGroupIds: [],
         customHeader: '⭐ *HARIKALA BULLION LLP* ⭐',
         customTemplate: DEFAULT_WA_TEMPLATE,
         autoSendEnabled: true,
@@ -585,8 +586,15 @@ function loadWaConfig() {
     try {
         if (fs.existsSync(WA_CONFIG_FILE)) {
             const parsed = JSON.parse(fs.readFileSync(WA_CONFIG_FILE, 'utf8'));
+            let gIds = [];
+            if (Array.isArray(parsed.targetGroupIds) && parsed.targetGroupIds.length > 0) {
+                gIds = parsed.targetGroupIds;
+            } else if (parsed.targetGroupId) {
+                gIds = [parsed.targetGroupId];
+            }
             cfg = {
-                targetGroupId: parsed.targetGroupId || '',
+                targetGroupId: gIds[0] || parsed.targetGroupId || '',
+                targetGroupIds: gIds,
                 customHeader: parsed.customHeader || '⭐ *HARIKALA BULLION LLP* ⭐',
                 customTemplate: parsed.customTemplate || DEFAULT_WA_TEMPLATE,
                 autoSendEnabled: parsed.autoSendEnabled !== undefined ? parsed.autoSendEnabled : (parsed.autoSend11Am !== undefined ? parsed.autoSend11Am : true),
@@ -678,22 +686,30 @@ async function initWhatsApp() {
 
 async function sendGoldGstRateMessage(customGroupId = null) {
     const config = loadWaConfig();
-    let groupId = customGroupId || config.targetGroupId;
+    let targetIds = [];
+
+    if (customGroupId) {
+        targetIds = [customGroupId];
+    } else if (Array.isArray(config.targetGroupIds) && config.targetGroupIds.length > 0) {
+        targetIds = config.targetGroupIds;
+    } else if (config.targetGroupId) {
+        targetIds = [config.targetGroupId];
+    }
 
     if (!isWaConnected || !waSock) {
         throw new Error("WhatsApp client is not connected. Please scan QR code at /whatsapp-qr first.");
     }
-    if (!groupId) {
+    if (targetIds.length === 0) {
         try {
             const groupMap = await waSock.groupFetchAllParticipating();
             const groups = Object.keys(groupMap);
             if (groups.length > 0) {
-                groupId = groups[0];
-                logDebug(`[WA AUTO GROUP] Target group was empty, auto-selected first group: ${groupId} (${groupMap[groupId]?.subject})`);
+                targetIds = [groups[0]];
+                logWa(`[WA AUTO GROUP] Target group was empty, auto-selected first group: ${groups[0]} (${groupMap[groups[0]]?.subject})`);
             }
         } catch (ge) {}
     }
-    if (!groupId) {
+    if (targetIds.length === 0) {
         throw new Error("No target WhatsApp Group ID configured. Select target group in app or API.");
     }
 
@@ -736,13 +752,22 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     });
 
     const ratesBlockText = ratesLines.join('\n\n');
-
     let template = config.customTemplate && config.customTemplate.trim().length > 0 ? config.customTemplate : DEFAULT_WA_TEMPLATE;
     const messageText = template.includes('{RATES}') ? template.replace('{RATES}', ratesBlockText) : `${template}\n\n${ratesBlockText}`;
 
-    await waSock.sendMessage(groupId, { text: messageText });
-    logDebug(`[WA SENT] Successfully sent WhatsApp Rate Message to ${groupId}`);
-    return { success: true, groupId, messageText };
+    const sendResults = [];
+    for (const gid of targetIds) {
+        try {
+            await waSock.sendMessage(gid, { text: messageText });
+            logWa(`[WA SENT] Successfully sent WhatsApp Rate Message to ${gid}`);
+            sendResults.push({ groupId: gid, success: true });
+        } catch (err) {
+            logWa(`[WA SEND ERROR ${gid}] ${err.message}`);
+            sendResults.push({ groupId: gid, success: false, error: err.message });
+        }
+    }
+
+    return { success: sendResults.some(r => r.success), sendResults, messageText };
 }
 
 function normalizeTimeStr(tStr) {
