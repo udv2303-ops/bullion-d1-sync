@@ -707,18 +707,33 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     if (!isWaConnected || !waSock) {
         throw new Error("WhatsApp client is not connected. Please scan QR code at /whatsapp-qr first.");
     }
-    if (targetIds.length === 0) {
-        try {
-            const groupMap = await waSock.groupFetchAllParticipating();
-            const groups = Object.keys(groupMap);
-            if (groups.length > 0) {
-                targetIds = [groups[0]];
-                logWa(`[WA AUTO GROUP] Target group was empty, auto-selected first group: ${groups[0]} (${groupMap[groups[0]]?.subject})`);
-            }
-        } catch (ge) {}
+
+    // Fetch live participating groups to filter out invalid or Community parent containers
+    let validGroupMap = {};
+    try {
+        validGroupMap = await waSock.groupFetchAllParticipating();
+    } catch (ge) {
+        logWa(`[WA GROUP FETCH WARNING] ${ge.message}`);
     }
+
+    const validGroupIds = new Set(
+        Object.values(validGroupMap)
+            .filter(g => !g.isCommunity) // Filter out Community Parent containers
+            .map(g => g.id)
+    );
+
+    // If targetIds are specified, keep only those present in validGroupIds
+    let filteredTargets = targetIds.filter(id => validGroupIds.has(id));
+
+    if (filteredTargets.length === 0 && Object.keys(validGroupMap).length > 0) {
+        filteredTargets = Array.from(validGroupIds);
+        logWa(`[WA AUTO GROUP] Filtered targets were empty, defaulting to all valid active groups (${filteredTargets.length})`);
+    }
+
+    targetIds = filteredTargets;
+
     if (targetIds.length === 0) {
-        throw new Error("No target WhatsApp Group ID configured. Select target group in app or API.");
+        throw new Error("No valid target WhatsApp Group ID found. Select target group in app or API.");
     }
 
     const selectedScripts = config.selectedScripts || ['GOLD_999_GST'];
