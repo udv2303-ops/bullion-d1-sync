@@ -140,7 +140,7 @@ function getAssetDateStringForTimestamp(asset, timestampMs) {
     
     if (asset === "XAU_USD" || asset === "XAG_USD") {
         const dst = isUsDst(istDate);
-        const shiftMinutes = dst ? (3 * 60 + 30) : (4 * 60 + 30); // Summer: 3:31 AM to 2:30 AM IST | Winter: 4:31 AM to 3:30 AM IST
+        const shiftMinutes = dst ? (3 * 60 + 31) : (4 * 60 + 31); // Summer: 3:31:00 AM to 2:30:59 AM IST | Winter: 4:31:00 AM to 3:30:59 AM IST
         const shiftedDate = new Date(istTimeMs - shiftMinutes * 60 * 1000);
         return shiftedDate.toISOString().split('T')[0];
     } else {
@@ -171,7 +171,7 @@ function getTimestampRangeForDate(asset, dateStr) {
     if (asset === "XAU_USD" || asset === "XAG_USD") {
         const dateForDst = new Date(midnightIstMs);
         const dst = isUsDst(dateForDst);
-        const shiftMs = dst ? (3.5 * 60 * 60 * 1000) : (4.5 * 60 * 60 * 1000);
+        const shiftMs = dst ? ((3 * 3600 + 31 * 60) * 1000) : ((4 * 3600 + 31 * 60) * 1000);
         startMs += shiftMs;
         endMs += shiftMs;
     }
