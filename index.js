@@ -542,6 +542,15 @@ let latestQrCode = null;
 let isWaConnected = false;
 let waConnectedUser = null;
 let lastSent11AmDate = '';
+const waSchedulerLogs = [];
+
+function logWa(msg) {
+    const istNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+    const entry = `[IST ${istNow}] ${msg}`;
+    waSchedulerLogs.push(entry);
+    if (waSchedulerLogs.length > 100) waSchedulerLogs.shift();
+    logDebug(msg);
+}
 
 const WA_CONFIG_FILE = path.join(__dirname, 'whatsapp_config.json');
 
@@ -736,6 +745,16 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     return { success: true, groupId, messageText };
 }
 
+function normalizeTimeStr(tStr) {
+    if (!tStr) return "";
+    const clean = tStr.trim();
+    const parts = clean.split(':');
+    if (parts.length < 2) return clean;
+    const h = String(parseInt(parts[0], 10)).padStart(2, '0');
+    const m = String(parseInt(parts[1], 10)).padStart(2, '0');
+    return `${h}:${m}`;
+}
+
 function getIstTimeInfo() {
     const now = new Date();
     const formatter = new Intl.DateTimeFormat('en-GB', {
@@ -770,23 +789,37 @@ setInterval(async () => {
         const { timeFormatted, todayIstStr, isSunday } = getIstTimeInfo();
         const config = loadWaConfig();
 
-        if (config.autoSendEnabled && isWaConnected) {
-            // Check Sunday Exception
-            if (config.skipSunday && isSunday) {
-                return; // Do not auto-send on Sundays!
-            }
+        if (!config.autoSendEnabled) {
+            return;
+        }
 
-            const targetTime = config.autoSendTime || '11:00';
-            const sendKey = `${todayIstStr}_${targetTime}`;
+        if (!isWaConnected) {
+            logWa(`[WA SCHEDULER] Skipping check at ${timeFormatted} IST - WhatsApp client is not connected.`);
+            return;
+        }
 
-            if (timeFormatted === targetTime && lastSentWaKey !== sendKey) {
-                logDebug(`[WA SCHEDULER] ⏰ Triggering scheduled WhatsApp rate send at ${timeFormatted} IST (Target: ${targetTime})...`);
+        if (config.skipSunday && isSunday) {
+            return; // Do not auto-send on Sundays!
+        }
+
+        const targetTime = config.autoSendTime || '11:00';
+        const normCurr = normalizeTimeStr(timeFormatted);
+        const normTarget = normalizeTimeStr(targetTime);
+        const sendKey = `${todayIstStr}_${normTarget}`;
+
+        if (normCurr === normTarget && lastSentWaKey !== sendKey) {
+            logWa(`[WA SCHEDULER] ⏰ Match found! Current IST: ${normCurr}, Target Time: ${normTarget}. Triggering rate send...`);
+            try {
+                const res = await sendGoldGstRateMessage();
                 lastSentWaKey = sendKey;
-                await sendGoldGstRateMessage();
+                logWa(`[WA SCHEDULER SUCCESS] ✅ Rate message sent successfully to group ${res.groupId} at ${normCurr} IST!`);
+            } catch (sendErr) {
+                logWa(`[WA SCHEDULER ERROR] ❌ Failed to send rate message: ${sendErr.message}`);
+                // Do NOT update lastSentWaKey so scheduler retries during next 10s tick!
             }
         }
     } catch (e) {
-        logDebug(`[WA SCHEDULER ERROR] ${e.message}`);
+        logWa(`[WA SCHEDULER CRITICAL ERROR] ${e.message}`);
     }
 }, 10000);
 
@@ -1052,6 +1085,10 @@ http.createServer(async (req, res) => {
                 lastSentWaKey,
                 config: loadWaConfig()
             }));
+        }
+        else if (path === '/api/whatsapp/logs') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(waSchedulerLogs));
         }
         else if (path === '/api/whatsapp/groups') {
             if (!isWaConnected || !waSock) {
