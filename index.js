@@ -764,21 +764,26 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     const messageText = template.includes('{RATES}') ? template.replace('{RATES}', ratesBlockText) : `${template}\n\n${ratesBlockText}`;
 
     const sendResults = [];
-    logWa(`[WA BROADCAST] Dispatching rate message to ${targetIds.length} target group(s): ${JSON.stringify(targetIds)}`);
+    logWa(`[WA BROADCAST] Starting multi-group dispatch to ${targetIds.length} group(s): ${JSON.stringify(targetIds)}`);
 
-    for (const gid of targetIds) {
+    for (let i = 0; i < targetIds.length; i++) {
+        const gid = targetIds[i];
         const formattedJid = gid.includes('@') ? gid : `${gid}@g.us`;
         try {
+            logWa(`[WA BROADCAST ${i + 1}/${targetIds.length}] Sending to group: ${formattedJid}...`);
             await waSock.sendMessage(formattedJid, { text: messageText });
-            logWa(`[WA SENT SUCCESS] Sent to group: ${formattedJid}`);
+            logWa(`[WA SENT SUCCESS ${i + 1}/${targetIds.length}] Sent to group: ${formattedJid}`);
             sendResults.push({ groupId: formattedJid, success: true });
         } catch (err) {
-            logWa(`[WA SEND ERROR] Failed to send to group ${formattedJid}: ${err.message}`);
+            logWa(`[WA SEND ERROR ${i + 1}/${targetIds.length}] Failed to send to group ${formattedJid}: ${err.message}`);
             sendResults.push({ groupId: formattedJid, success: false, error: err.message });
+        }
+        if (i < targetIds.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
     }
 
-    return { success: sendResults.some(r => r.success), targetCount: targetIds.length, sendResults, messageText };
+    return { success: sendResults.some(r => r.success), targetCount: targetIds.length, sentCount: sendResults.filter(r => r.success).length, sendResults, messageText };
 }
 
 function normalizeTimeStr(tStr) {
