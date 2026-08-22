@@ -756,6 +756,15 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(results));
         }
+        else if (path === '/api/test-op') {
+            const range21 = getTimestampRangeForDate("XAU_USD", "2026-08-21");
+            const res21 = await queryD1(
+                "SELECT CAST(price AS REAL) as price, timestamp FROM intraday_prices WHERE asset = 'XAU_USD' AND CAST(timestamp AS NUMERIC) >= ? AND CAST(timestamp AS NUMERIC) <= ? ORDER BY CAST(timestamp AS NUMERIC) ASC LIMIT 5",
+                [range21.startMs, range21.endMs]
+            );
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ range21, ticks: res21.result?.[0]?.results }));
+        }
         else if (path === '/api/debug-sync') {
             await syncHarikalaBroadcast();
             const dbRes = await queryD1(
