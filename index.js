@@ -140,7 +140,7 @@ function getAssetDateStringForTimestamp(asset, timestampMs) {
     
     if (asset === "XAU_USD" || asset === "XAG_USD") {
         const dst = isUsDst(istDate);
-        const shiftMinutes = dst ? (2 * 60 + 30) : (3 * 60 + 30); // 2:30 AM or 3:30 AM IST transition
+        const shiftMinutes = dst ? (3 * 60 + 30) : (4 * 60 + 30); // Summer: 3:31 AM to 2:30 AM IST | Winter: 4:31 AM to 3:30 AM IST
         const shiftedDate = new Date(istTimeMs - shiftMinutes * 60 * 1000);
         return shiftedDate.toISOString().split('T')[0];
     } else {
@@ -148,7 +148,7 @@ function getAssetDateStringForTimestamp(asset, timestampMs) {
     }
 }
 
-// Get shifted date string for spot gold/silver based on US DST (2:30 AM/3:30 AM IST transition)
+// Get shifted date string for spot gold/silver based on US DST (3:31 AM Summer / 4:31 AM Winter transition)
 function getSpotAssetDateString() {
     return getAssetDateStringForTimestamp("XAU_USD", Date.now());
 }
@@ -171,7 +171,7 @@ function getTimestampRangeForDate(asset, dateStr) {
     if (asset === "XAU_USD" || asset === "XAG_USD") {
         const dateForDst = new Date(midnightIstMs);
         const dst = isUsDst(dateForDst);
-        const shiftMs = dst ? (2.5 * 60 * 60 * 1000) : (3.5 * 60 * 60 * 1000);
+        const shiftMs = dst ? (3.5 * 60 * 60 * 1000) : (4.5 * 60 * 60 * 1000);
         startMs += shiftMs;
         endMs += shiftMs;
     }
@@ -1007,18 +1007,61 @@ http.createServer(async (req, res) => {
 });
 
 // Create database indexes on launch to optimize queries
+async function recalculateLast3DaysSpotOHLC() {
+    try {
+        logDebug("Recalculating last 3 days Spot OHLC based on 3:31 AM IST cycle...");
+        const assets = ["XAU_USD", "XAG_USD"];
+        const dates = ["2026-08-19", "2026-08-20", "2026-08-21", "2026-08-22"];
+        
+        for (const asset of assets) {
+            for (const dateStr of dates) {
+                const range = getTimestampRangeForDate(asset, dateStr);
+                if (!range) continue;
+                
+                const ticksRes = await queryD1(
+                    "SELECT CAST(price AS REAL) as price, timestamp FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+                    [asset, range.startMs, range.endMs]
+                );
+                const ticks = ticksRes.result?.[0]?.results || [];
+                if (ticks.length > 0) {
+                    const openVal = ticks[0].price;
+                    const closeVal = ticks[ticks.length - 1].price;
+                    let highVal = openVal;
+                    let lowVal = openVal;
+                    for (const t of ticks) {
+                        if (t.price > highVal) highVal = t.price;
+                        if (t.price < lowVal) lowVal = t.price;
+                    }
+                    const check = await queryD1("SELECT id FROM prices WHERE asset = ? AND date = ?", [asset, dateStr]);
+                    const existingRows = check.result?.[0]?.results || [];
+                    if (existingRows.length > 0) {
+                        await queryD1(
+                            "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
+                            [openVal, highVal, lowVal, closeVal, Date.now(), existingRows[0].id]
+                        );
+                    } else {
+                        await queryD1(
+                            "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            [asset, dateStr, openVal, highVal, lowVal, closeVal, Date.now()]
+                        );
+                    }
+                    logDebug(`[RECALC] Updated ${asset} for ${dateStr}: O:${openVal} H:${highVal} L:${lowVal} C:${closeVal}`);
+                }
+            }
+        }
+    } catch (e) {
+        logDebug(`Recalculate error: ${e.message}`);
+    }
+}
+
+// Create database indexes on launch to optimize queries
 async function initDatabaseIndexes() {
     try {
         logDebug("Initializing D1 Database indexes...");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         
-        logDebug("Cleaning up Spot prices for correct DST session dates...");
-        await queryD1("UPDATE prices SET open = 4522.65, high = 4541.0, low = 4450.58, close = 4528.4 WHERE asset = 'XAU_USD' AND date = '2026-08-20'");
-        await queryD1("UPDATE prices SET open = 68.19, high = 68.96, low = 65.63, close = 68.19 WHERE asset = 'XAG_USD' AND date = '2026-08-20'");
-        await queryD1("UPDATE prices SET open = 4528.4, high = 4528.4, low = 4518.0, close = 4519.2 WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
-        await queryD1("UPDATE prices SET open = 68.19, high = 68.19, low = 68.08, close = 68.12 WHERE asset = 'XAG_USD' AND date = '2026-08-21'");
-        logDebug("Spot prices cleaned up successfully.");
+        await recalculateLast3DaysSpotOHLC();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
     }
