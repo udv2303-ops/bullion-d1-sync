@@ -946,19 +946,22 @@ http.createServer(async (req, res) => {
             await upsertPriceRow('XAU_USD', '2026-08-19', 4333.85, 4525.00, 4325.75, 4522.65);
 
             // GOLD_MCX
-            await upsertPriceRow('GOLD_MCX', '2026-08-21', 159878, 162680, 159689, 162460);
-            await upsertPriceRow('GOLD_MCX', '2026-08-20', 158286, 160009, 157059, 159537);
-            await upsertPriceRow('GOLD_MCX', '2026-08-19', 154136, 158235, 153410, 158075);
+            await upsertPriceRow('GOLD_MCX', '2026-08-21', 160630, 162680, 159601, 162438);
+            await upsertPriceRow('GOLD_MCX', '2026-08-20', 158008, 160000, 157020, 159425);
+            await upsertPriceRow('GOLD_MCX', '2026-08-19', 153900, 158234, 153404, 157996);
+            await upsertPriceRow('GOLD_MCX', '2026-08-18', 155351, 155725, 154120, 154262);
 
             // SILVER_MCX
-            await upsertPriceRow('SILVER_MCX', '2026-08-21', 244939, 248118, 244380, 246754);
-            await upsertPriceRow('SILVER_MCX', '2026-08-20', 240017, 244997, 235702, 243299);
-            await upsertPriceRow('SILVER_MCX', '2026-08-19', 230300, 237300, 227999, 236780);
+            await upsertPriceRow('SILVER_MCX', '2026-08-21', 244988, 248124, 244251, 246597);
+            await upsertPriceRow('SILVER_MCX', '2026-08-20', 238500, 245000, 235665, 243243);
+            await upsertPriceRow('SILVER_MCX', '2026-08-19', 230001, 237298, 227931, 236787);
+            await upsertPriceRow('SILVER_MCX', '2026-08-18', 235717, 236314, 231340, 232419);
 
             // GOLD_999_GST
-            await upsertPriceRow('GOLD_999_GST', '2026-08-21', 163778, 166630, 163589, 166410);
-            await upsertPriceRow('GOLD_999_GST', '2026-08-20', 162186, 163909, 160959, 163437);
-            await upsertPriceRow('GOLD_999_GST', '2026-08-19', 157986, 162135, 157310, 161975);
+            await upsertPriceRow('GOLD_999_GST', '2026-08-21', 166316, 168439, 165251, 168188);
+            await upsertPriceRow('GOLD_999_GST', '2026-08-20', 163601, 165664, 162579, 165069);
+            await upsertPriceRow('GOLD_999_GST', '2026-08-19', 159348, 163835, 158835, 163589);
+            await upsertPriceRow('GOLD_999_GST', '2026-08-18', 160850, 161238, 159576, 159723);
 
             const updated = await queryD1("SELECT asset, date, open, high, low, close FROM prices WHERE date IN ('2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22')");
             res.writeHead(200, { 'Content-Type': 'application/json' });
