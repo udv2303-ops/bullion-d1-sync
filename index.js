@@ -967,11 +967,10 @@ http.createServer(async (req, res) => {
         else if (path === '/api/debug-sync') {
             await syncHarikalaBroadcast();
             const dbRes = await queryD1(
-                "SELECT * FROM prices WHERE date = ?",
-                [getIstDateString()]
-            );
+        else if (path === '/api/dedupe') {
+            await deduplicateD1PricesTable();
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(dbRes));
+            res.end(JSON.stringify({ success: true, message: 'Deduplicated D1 prices table!' }));
         }
         else if (path === '/api/historical') {
             const asset = query.asset;
