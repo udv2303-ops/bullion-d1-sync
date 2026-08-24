@@ -204,40 +204,32 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         const timestamp = Date.now();
         let targetHigh = high;
         let targetLow = low;
+        let targetOpen = open;
 
-        if (asset === "XAU_USD" || asset === "XAG_USD") {
-            if (asset === "XAU_USD") {
-                if (dateStr === "2026-08-21") open = 4521.45;
-                else if (dateStr === "2026-08-20") open = 4522.65;
-                else if (dateStr === "2026-08-19") open = 4333.85;
+        const range = getTimestampRangeForDate(asset, dateStr);
+        if (range) {
+            const firstTickRes = await queryD1(
+                "SELECT CAST(price AS REAL) as price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1",
+                [asset, range.startMs, range.endMs]
+            );
+            const firstRow = firstTickRes.result?.[0]?.results?.[0];
+            if (firstRow && firstRow.price > 0 && (targetOpen <= 0 || !targetOpen)) {
+                targetOpen = firstRow.price;
             }
-            const range = getTimestampRangeForDate(asset, dateStr);
-            if (range) {
-                if (open <= 0 || !open) {
-                    const firstTickRes = await queryD1(
-                        "SELECT CAST(price AS REAL) as price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1",
-                        [asset, range.startMs, range.endMs]
-                    );
-                    const firstRow = firstTickRes.result?.[0]?.results?.[0];
-                    if (firstRow && firstRow.price > 0) {
-                        open = firstRow.price;
-                    }
-                }
 
-                const tickRes = await queryD1(
-                    "SELECT MAX(CAST(price AS REAL)) as max_price, MIN(CAST(price AS REAL)) as min_price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ?",
-                    [asset, range.startMs, range.endMs]
-                );
-                const tickRow = tickRes.result?.[0]?.results?.[0];
-                if (tickRow && tickRow.max_price > 0) {
-                    targetHigh = tickRow.max_price;
-                    targetLow = tickRow.min_price;
-                } else {
-                    targetHigh = close;
-                    targetLow = close;
-                }
+            const tickRes = await queryD1(
+                "SELECT MAX(CAST(price AS REAL)) as max_price, MIN(CAST(price AS REAL)) as min_price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ?",
+                [asset, range.startMs, range.endMs]
+            );
+            const tickRow = tickRes.result?.[0]?.results?.[0];
+            if (tickRow && tickRow.max_price > 0) {
+                targetHigh = Math.max(targetHigh, tickRow.max_price);
+                targetLow = (targetLow > 0) ? Math.min(targetLow, tickRow.min_price) : tickRow.min_price;
             }
         }
+
+        if (targetHigh <= 0) targetHigh = close;
+        if (targetLow <= 0) targetLow = close;
 
         const checkRes = await queryD1(
             "SELECT id, open, high, low FROM prices WHERE asset = ? AND date = ?",
@@ -247,9 +239,9 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
 
         if (rows.length > 0) {
             const existing = rows[0];
-            const updatedOpen = (asset === "XAU_USD" || asset === "XAG_USD") ? open : (existing.open > 0 ? existing.open : open);
-            const updatedHigh = (asset === "XAU_USD" || asset === "XAG_USD") ? Math.max(targetHigh, close) : Math.max(existing.high || 0.0, targetHigh);
-            const updatedLow = (asset === "XAU_USD" || asset === "XAG_USD") ? Math.min(targetLow, close) : Math.min(existing.low || close, targetLow);
+            const updatedOpen = (targetOpen > 0 && targetOpen !== 4521.45 && targetOpen !== 4522.65 && targetOpen !== 4333.85) ? targetOpen : (existing.open > 0 ? existing.open : close);
+            const updatedHigh = Math.max(existing.high || 0.0, targetHigh, close);
+            const updatedLow = Math.min(existing.low > 0 ? existing.low : targetLow, targetLow, close);
 
             await queryD1(
                 "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
@@ -258,7 +250,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         } else {
             await queryD1(
                 "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [asset, dateStr, open, targetHigh > 0 ? targetHigh : close, targetLow > 0 ? targetLow : close, close, timestamp]
+                [asset, dateStr, targetOpen > 0 ? targetOpen : close, targetHigh, targetLow, close, timestamp]
             );
         }
     } catch (e) {
@@ -1194,25 +1186,54 @@ http.createServer(async (req, res) => {
 });
 
 // Create database indexes on launch to optimize queries
-async function recalculateLast3DaysSpotOHLC() {
+async function recalculateAllOHLCFromTicks() {
     try {
-        logDebug("Recalculating last 3 days Spot OHLC based on 3:31 AM IST cycle...");
-        await queryD1("DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND date IN ('2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22')");
+        logDebug("Recalculating all OHLC daily summaries from intraday ticks for all 5 assets...");
+        await queryD1("DELETE FROM prices");
         
+        const assets = ["XAU_USD", "XAG_USD", "GOLD_MCX", "SILVER_MCX", "GOLD_999_GST"];
         const now = Date.now();
-        // Exact Spot Gold (XAU_USD) 3:31 AM IST session start OHLC entries
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-21', 4521.45, 4632.55, 4509.85, 4603.30, ?)", [now]);
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-20', 4522.65, 4540.80, 4451.10, 4519.20, ?)", [now]);
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-19', 4333.85, 4525.00, 4325.75, 4522.65, ?)", [now]);
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-22', 4603.30, 4603.30, 4603.30, 4603.30, ?)", [now]);
+        
+        for (const asset of assets) {
+            const dbRes = await queryD1(
+                "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts FROM intraday_prices WHERE asset = ?",
+                [asset]
+            );
+            const row = dbRes.result?.[0]?.results?.[0];
+            if (!row || row.min_ts === null || row.max_ts === null) continue;
 
-        // Exact Spot Silver (XAG_USD) entries
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAG_USD', '2026-08-21', 68.50, 71.20, 67.80, 69.00, ?)", [now]);
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAG_USD', '2026-08-20', 67.20, 68.90, 66.50, 68.50, ?)", [now]);
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAG_USD', '2026-08-19', 65.40, 67.50, 65.00, 67.20, ?)", [now]);
-        await queryD1("INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAG_USD', '2026-08-22', 69.00, 69.00, 69.00, 69.00, ?)", [now]);
+            const dates = new Set();
+            for (let ts = row.min_ts; ts <= row.max_ts; ts += 3600 * 1000) {
+                dates.add(getAssetDateStringForTimestamp(asset, ts));
+            }
+            dates.add(getAssetDateStringForTimestamp(asset, row.max_ts));
 
-        logDebug("[RECALC] Last 3 days Spot OHLC successfully stored!");
+            for (const dateStr of Array.from(dates).sort()) {
+                const range = getTimestampRangeForDate(asset, dateStr);
+                if (!range) continue;
+
+                const ticksRes = await queryD1(
+                    "SELECT CAST(price AS REAL) as price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ? ORDER BY CAST(timestamp AS INTEGER) ASC",
+                    [asset, range.startMs, range.endMs]
+                );
+                const ticks = ticksRes.result?.[0]?.results || [];
+                if (ticks.length > 0) {
+                    const open = ticks[0].price;
+                    const close = ticks[ticks.length - 1].price;
+                    let high = open;
+                    let low = open;
+                    ticks.forEach(t => {
+                        if (t.price > high) high = t.price;
+                        if (t.price < low && t.price > 0) low = t.price;
+                    });
+                    await queryD1(
+                        "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        [asset, dateStr, open, high, low, close, now]
+                    );
+                }
+            }
+        }
+        logDebug("[RECALC] All 5 assets' daily OHLC summaries successfully recalculated from ticks!");
     } catch (e) {
         logDebug(`Recalculate error: ${e.message}`);
     }
@@ -1225,7 +1246,7 @@ async function initDatabaseIndexes() {
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         
-        await recalculateLast3DaysSpotOHLC();
+        await recalculateAllOHLCFromTicks();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
     }
