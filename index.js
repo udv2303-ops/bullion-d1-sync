@@ -174,6 +174,10 @@ function getTimestampRangeForDate(asset, dateStr) {
         const shiftMs = dst ? ((3 * 3600 + 31 * 60) * 1000) : ((4 * 3600 + 31 * 60) * 1000);
         startMs += shiftMs;
         endMs += shiftMs;
+    } else if (asset === "GOLD_MCX" || asset === "SILVER_MCX" || asset === "GOLD_999_GST") {
+        // Explicit 9:00:10 AM IST to 11:55:10 PM IST session range for MCX & GST
+        startMs = midnightIstMs + (9 * 3600 + 10) * 1000;
+        endMs = midnightIstMs + (23 * 3600 + 55 * 60 + 10) * 1000;
     }
     
     return { startMs, endMs };
