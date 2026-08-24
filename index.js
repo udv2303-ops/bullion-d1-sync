@@ -1301,6 +1301,14 @@ async function initDatabaseIndexes() {
 // Run immediately on launch
 (async () => {
     await initDatabaseIndexes();
+    try {
+        logDebug("Syncing 3-year historical OHLC for GOLD_MCX, SILVER_MCX, and GOLD_999_GST...");
+        await syncMcxAsset("GOLD_MCX", "GOLD", true);
+        await syncMcxAsset("SILVER_MCX", "SILVER", true);
+        logDebug("Historical OHLC sync completed successfully.");
+    } catch (err) {
+        logDebug(`Error syncing MCX history: ${err.message}`);
+    }
     initWhatsApp();
     runSyncCycle();
 })();
