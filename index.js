@@ -206,6 +206,8 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         let targetLow = low;
         let targetOpen = open;
 
+        const isCorruptedOpen = (val) => (!val || val <= 0 || val === 4521.45 || val === 4522.65 || val === 4333.85);
+
         const range = getTimestampRangeForDate(asset, dateStr);
         if (range) {
             const firstTickRes = await queryD1(
@@ -213,7 +215,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
                 [asset, range.startMs, range.endMs]
             );
             const firstRow = firstTickRes.result?.[0]?.results?.[0];
-            if (firstRow && firstRow.price > 0 && (targetOpen <= 0 || !targetOpen)) {
+            if (firstRow && firstRow.price > 0 && isCorruptedOpen(targetOpen)) {
                 targetOpen = firstRow.price;
             }
 
@@ -232,25 +234,46 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         if (targetLow <= 0) targetLow = close;
 
         const checkRes = await queryD1(
-            "SELECT id, open, high, low FROM prices WHERE asset = ? AND date = ?",
+            "SELECT id, open, high, low FROM prices WHERE asset = ? AND date = ? ORDER BY id DESC",
             [asset, dateStr]
         );
         const rows = checkRes.result?.[0]?.results || [];
 
         if (rows.length > 0) {
             const existing = rows[0];
-            const updatedOpen = (targetOpen > 0 && targetOpen !== 4521.45 && targetOpen !== 4522.65 && targetOpen !== 4333.85) ? targetOpen : (existing.open > 0 ? existing.open : close);
+
+            // Delete any extra duplicate rows for this asset and date
+            if (rows.length > 1) {
+                for (let i = 1; i < rows.length; i++) {
+                    await queryD1("DELETE FROM prices WHERE id = ?", [rows[i].id]);
+                }
+            }
+
+            // CRITICAL LOCK: Preserve existing valid open price! Never overwrite valid open with live ticks!
+            let updatedOpen = existing.open;
+            if (isCorruptedOpen(existing.open)) {
+                updatedOpen = !isCorruptedOpen(targetOpen) ? targetOpen : close;
+            }
+
             const updatedHigh = Math.max(existing.high || 0.0, targetHigh, close);
-            const updatedLow = Math.min(existing.low > 0 ? existing.low : targetLow, targetLow, close);
+            let updatedLow = close;
+            if (existing.low > 0 && targetLow > 0) {
+                updatedLow = Math.min(existing.low, targetLow);
+            } else if (existing.low > 0) {
+                updatedLow = existing.low;
+            } else if (targetLow > 0) {
+                updatedLow = targetLow;
+            }
 
             await queryD1(
                 "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
                 [updatedOpen, updatedHigh, updatedLow, close, timestamp, existing.id]
             );
         } else {
+            const finalOpen = !isCorruptedOpen(targetOpen) ? targetOpen : close;
             await queryD1(
                 "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [asset, dateStr, targetOpen > 0 ? targetOpen : close, targetHigh, targetLow, close, timestamp]
+                [asset, dateStr, finalOpen, targetHigh, targetLow, close, timestamp]
             );
         }
     } catch (e) {
@@ -953,10 +976,20 @@ http.createServer(async (req, res) => {
         else if (path === '/api/historical') {
             const asset = query.asset;
             const dbRes = await queryD1(
-                "SELECT date, open, high, low, close, timestamp FROM prices WHERE asset = ? ORDER BY date DESC",
+                "SELECT date, open, high, low, close, timestamp FROM prices WHERE asset = ? ORDER BY date DESC, timestamp DESC",
                 [asset]
             );
-            let results = dbRes.result?.[0]?.results || [];
+            let rawResults = dbRes.result?.[0]?.results || [];
+            
+            // Deduplicate by date to guarantee 1 single row per date
+            const dateMap = new Map();
+            for (const r of rawResults) {
+                if (!dateMap.has(r.date)) {
+                    dateMap.set(r.date, r);
+                }
+            }
+            let results = Array.from(dateMap.values());
+
             if (asset === "XAU_USD") {
                 results = results.map(r => {
                     if (r.date === "2026-08-21") return { ...r, open: 4521.45 };
@@ -1339,6 +1372,39 @@ async function ensureHistoricalBaselines() {
     }
 }
 
+async function deduplicateD1PricesTable() {
+    try {
+        logDebug("Deduplicating prices table in Cloud D1...");
+        const assets = ["XAU_USD", "XAG_USD", "GOLD_MCX", "SILVER_MCX", "GOLD_999_GST"];
+        for (const asset of assets) {
+            const res = await queryD1(
+                "SELECT id, date FROM prices WHERE asset = ? ORDER BY id DESC",
+                [asset]
+            );
+            const rows = res.result?.[0]?.results || [];
+            const seenDates = new Set();
+            const idsToDelete = [];
+
+            for (const row of rows) {
+                if (seenDates.has(row.date)) {
+                    idsToDelete.push(row.id);
+                } else {
+                    seenDates.add(row.date);
+                }
+            }
+
+            for (const id of idsToDelete) {
+                await queryD1("DELETE FROM prices WHERE id = ?", [id]);
+            }
+            if (idsToDelete.length > 0) {
+                logDebug(`[DEDUPE] Deleted ${idsToDelete.length} duplicate rows for ${asset}`);
+            }
+        }
+    } catch (e) {
+        logDebug(`[DEDUPE ERROR] ${e.message}`);
+    }
+}
+
 // Create database indexes on launch to optimize queries
 async function initDatabaseIndexes() {
     try {
@@ -1346,8 +1412,10 @@ async function initDatabaseIndexes() {
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         
+        await deduplicateD1PricesTable();
         await ensureHistoricalBaselines();
         await recalculateAllOHLCFromTicks();
+        await deduplicateD1PricesTable();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
     }
