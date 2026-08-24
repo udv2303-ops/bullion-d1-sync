@@ -987,6 +987,16 @@ http.createServer(async (req, res) => {
                 delTicksResult: { message: "Tick deletion is disabled. All live logs are kept forever." }
             }));
         }
+        else if (path === '/api/recalculate-ohlc') {
+            try {
+                await recalculateAllOHLCFromTicks();
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, message: "Recalculated all OHLC from ticks for all 5 assets!" }));
+            } catch (e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        }
         else if (path === '/api/debug-logs') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(debugLogs));
