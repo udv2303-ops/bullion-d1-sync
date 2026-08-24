@@ -900,25 +900,25 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify({ range21, ticks: res21.result?.[0]?.results }));
         }
         else if (path === '/api/fix-open') {
-            await queryD1("UPDATE prices SET open = 4521.45 WHERE asset = 'XAU_USD' AND date = '2026-08-21'");
-            await queryD1("UPDATE prices SET open = 4522.65 WHERE asset = 'XAU_USD' AND date = '2026-08-20'");
-            await queryD1("UPDATE prices SET open = 4333.85 WHERE asset = 'XAU_USD' AND date = '2026-08-19'");
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [4521.45, 'XAU_USD', '2026-08-21']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [4522.65, 'XAU_USD', '2026-08-20']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [4333.85, 'XAU_USD', '2026-08-19']);
 
-            await queryD1("UPDATE prices SET open = 159878 WHERE asset = 'GOLD_MCX' AND date = '2026-08-21'");
-            await queryD1("UPDATE prices SET open = 158286 WHERE asset = 'GOLD_MCX' AND date = '2026-08-20'");
-            await queryD1("UPDATE prices SET open = 154136 WHERE asset = 'GOLD_MCX' AND date = '2026-08-19'");
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [159878, 'GOLD_MCX', '2026-08-21']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [158286, 'GOLD_MCX', '2026-08-20']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [154136, 'GOLD_MCX', '2026-08-19']);
 
-            await queryD1("UPDATE prices SET open = 244939 WHERE asset = 'SILVER_MCX' AND date = '2026-08-21'");
-            await queryD1("UPDATE prices SET open = 240017 WHERE asset = 'SILVER_MCX' AND date = '2026-08-20'");
-            await queryD1("UPDATE prices SET open = 230300 WHERE asset = 'SILVER_MCX' AND date = '2026-08-19'");
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [244939, 'SILVER_MCX', '2026-08-21']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [240017, 'SILVER_MCX', '2026-08-20']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [230300, 'SILVER_MCX', '2026-08-19']);
 
-            await queryD1("UPDATE prices SET open = 163778 WHERE asset = 'GOLD_999_GST' AND date = '2026-08-21'");
-            await queryD1("UPDATE prices SET open = 162186 WHERE asset = 'GOLD_999_GST' AND date = '2026-08-20'");
-            await queryD1("UPDATE prices SET open = 157986 WHERE asset = 'GOLD_999_GST' AND date = '2026-08-19'");
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [163778, 'GOLD_999_GST', '2026-08-21']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [162186, 'GOLD_999_GST', '2026-08-20']);
+            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [157986, 'GOLD_999_GST', '2026-08-19']);
 
-            const updated = await queryD1("SELECT * FROM prices WHERE date IN ('2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22')");
+            const updated = await queryD1("SELECT asset, date, open, high, low, close FROM prices WHERE date IN ('2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22')");
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(updated));
+            res.end(JSON.stringify(updated.result?.[0]?.results || []));
         }
         else if (path === '/api/debug-sync') {
             await syncHarikalaBroadcast();
