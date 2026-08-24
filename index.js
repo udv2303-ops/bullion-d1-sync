@@ -940,6 +940,9 @@ http.createServer(async (req, res) => {
             await upsertPriceRow('XAU_USD', '2026-08-19', 4333.85, 4525.00, 4325.75, 4522.65);
 
             // 2026-08-24 Exact Tick Log OHLC
+            await queryD1("UPDATE prices SET open = 167205, high = 168728, low = 167024 WHERE asset = 'GOLD_999_GST' AND date = '2026-08-24'");
+            await queryD1("UPDATE prices SET open = 163165, high = 164774, low = 162957 WHERE asset = 'GOLD_MCX' AND date = '2026-08-24'");
+            await queryD1("UPDATE prices SET open = 245439, high = 248799, low = 243699 WHERE asset = 'SILVER_MCX' AND date = '2026-08-24'");
             await upsertPriceRow('GOLD_999_GST', '2026-08-24', 167205, 168728, 167024, 167061);
             await upsertPriceRow('GOLD_MCX', '2026-08-24', 163165, 164774, 162957, 163111);
             await upsertPriceRow('SILVER_MCX', '2026-08-24', 245439, 248799, 243699, 244141);
