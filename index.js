@@ -900,21 +900,27 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify({ range21, ticks: res21.result?.[0]?.results }));
         }
         else if (path === '/api/fix-open') {
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [4521.45, 'XAU_USD', '2026-08-21']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [4522.65, 'XAU_USD', '2026-08-20']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [4333.85, 'XAU_USD', '2026-08-19']);
+            const now = Date.now();
+            
+            // XAU_USD
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-21', 4521.45, 4632.55, 4509.85, 4603.30, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-20', 4522.65, 4540.80, 4451.10, 4519.20, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('XAU_USD', '2026-08-19', 4333.85, 4525.00, 4325.75, 4522.65, ?)", [now]);
 
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [159878, 'GOLD_MCX', '2026-08-21']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [158286, 'GOLD_MCX', '2026-08-20']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [154136, 'GOLD_MCX', '2026-08-19']);
+            // GOLD_MCX
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('GOLD_MCX', '2026-08-21', 159878, 162680, 159689, 162460, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('GOLD_MCX', '2026-08-20', 158286, 160009, 157059, 159537, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('GOLD_MCX', '2026-08-19', 154136, 158235, 153410, 158075, ?)", [now]);
 
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [244939, 'SILVER_MCX', '2026-08-21']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [240017, 'SILVER_MCX', '2026-08-20']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [230300, 'SILVER_MCX', '2026-08-19']);
+            // SILVER_MCX
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('SILVER_MCX', '2026-08-21', 244939, 248118, 244380, 246754, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('SILVER_MCX', '2026-08-20', 240017, 244997, 235702, 243299, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('SILVER_MCX', '2026-08-19', 230300, 237300, 227999, 236780, ?)", [now]);
 
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [163778, 'GOLD_999_GST', '2026-08-21']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [162186, 'GOLD_999_GST', '2026-08-20']);
-            await queryD1("UPDATE prices SET open = ? WHERE asset = ? AND date = ?", [157986, 'GOLD_999_GST', '2026-08-19']);
+            // GOLD_999_GST
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('GOLD_999_GST', '2026-08-21', 163778, 166630, 163589, 166410, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('GOLD_999_GST', '2026-08-20', 162186, 163909, 160959, 163437, ?)", [now]);
+            await queryD1("INSERT OR REPLACE INTO prices (asset, date, open, high, low, close, timestamp) VALUES ('GOLD_999_GST', '2026-08-19', 157986, 162135, 157310, 161975, ?)", [now]);
 
             const updated = await queryD1("SELECT asset, date, open, high, low, close FROM prices WHERE date IN ('2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22')");
             res.writeHead(200, { 'Content-Type': 'application/json' });
