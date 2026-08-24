@@ -226,7 +226,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
             const tickRow = tickRes.result?.[0]?.results?.[0];
             if (tickRow && tickRow.max_price > 0) {
                 targetHigh = Math.max(targetHigh, tickRow.max_price);
-                targetLow = (targetLow > 0) ? Math.min(targetLow, tickRow.min_price) : tickRow.min_price;
+                targetLow = tickRow.min_price > 0 ? tickRow.min_price : targetLow;
             }
         }
 
@@ -256,14 +256,8 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
             }
 
             const updatedHigh = Math.max(existing.high || 0.0, targetHigh, close);
-            let updatedLow = close;
-            if (existing.low > 0 && targetLow > 0) {
-                updatedLow = Math.min(existing.low, targetLow);
-            } else if (existing.low > 0) {
-                updatedLow = existing.low;
-            } else if (targetLow > 0) {
-                updatedLow = targetLow;
-            }
+            // CRITICAL FIX: LOW is strictly determined by exact intraday tick log min_price!
+            const updatedLow = (targetLow > 0) ? targetLow : (existing.low > 0 ? existing.low : close);
 
             await queryD1(
                 "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
