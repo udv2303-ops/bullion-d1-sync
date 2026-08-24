@@ -613,7 +613,8 @@ function loadWaConfig() {
                 autoSendEnabled: parsed.autoSendEnabled !== undefined ? parsed.autoSendEnabled : (parsed.autoSend11Am !== undefined ? parsed.autoSend11Am : true),
                 autoSendTime: parsed.autoSendTime || '11:00',
                 skipSunday: parsed.skipSunday !== undefined ? parsed.skipSunday : true,
-                selectedScripts: Array.isArray(parsed.selectedScripts) && parsed.selectedScripts.length > 0 ? parsed.selectedScripts : ['GOLD_999_GST']
+                selectedScripts: Array.isArray(parsed.selectedScripts) && parsed.selectedScripts.length > 0 ? parsed.selectedScripts : ['GOLD_999_GST'],
+                lastSentKey: parsed.lastSentKey || ''
             };
         }
     } catch (e) {
@@ -842,7 +843,6 @@ setInterval(async () => {
         }
 
         if (!isWaConnected) {
-            logWa(`[WA SCHEDULER] Skipping check at ${timeFormatted} IST - WhatsApp client is not connected.`);
             return;
         }
 
@@ -855,15 +855,20 @@ setInterval(async () => {
         const normTarget = normalizeTimeStr(targetTime);
         const sendKey = `${todayIstStr}_${normTarget}`;
 
-        if (normCurr === normTarget && lastSentWaKey !== sendKey) {
+        // PERSISTENT DEDUPLICATION LOCK: Prevent duplicate auto-sends across server restarts!
+        if (config.lastSentKey === sendKey) {
+            return;
+        }
+
+        if (normCurr === normTarget) {
             logWa(`[WA SCHEDULER] ⏰ Match found! Current IST: ${normCurr}, Target Time: ${normTarget}. Triggering rate send...`);
+            // Instantly save lastSentKey to disk to prevent any duplicate dispatch if tick re-runs or server reboots!
+            saveWaConfig({ ...config, lastSentKey: sendKey });
             try {
                 const res = await sendGoldGstRateMessage();
-                lastSentWaKey = sendKey;
-                logWa(`[WA SCHEDULER SUCCESS] ✅ Rate message sent successfully to group ${res.groupId} at ${normCurr} IST!`);
+                logWa(`[WA SCHEDULER SUCCESS] ✅ Rate message sent successfully at ${normCurr} IST!`);
             } catch (sendErr) {
                 logWa(`[WA SCHEDULER ERROR] ❌ Failed to send rate message: ${sendErr.message}`);
-                // Do NOT update lastSentWaKey so scheduler retries during next 10s tick!
             }
         }
     } catch (e) {
