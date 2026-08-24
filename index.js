@@ -939,6 +939,11 @@ http.createServer(async (req, res) => {
             await upsertPriceRow('XAU_USD', '2026-08-20', 4522.65, 4540.80, 4451.10, 4519.20);
             await upsertPriceRow('XAU_USD', '2026-08-19', 4333.85, 4525.00, 4325.75, 4522.65);
 
+            // 2026-08-24 Exact Tick Log OHLC
+            await upsertPriceRow('GOLD_999_GST', '2026-08-24', 167205, 168728, 167024, 167061);
+            await upsertPriceRow('GOLD_MCX', '2026-08-24', 163165, 164774, 162957, 163111);
+            await upsertPriceRow('SILVER_MCX', '2026-08-24', 245439, 248799, 243699, 244141);
+
             // GOLD_MCX
             await upsertPriceRow('GOLD_MCX', '2026-08-21', 159878, 162680, 159689, 162460);
             await upsertPriceRow('GOLD_MCX', '2026-08-20', 158286, 160009, 157059, 159537);
