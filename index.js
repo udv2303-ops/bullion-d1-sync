@@ -1235,10 +1235,7 @@ http.createServer(async (req, res) => {
 async function recalculateAllOHLCFromTicks() {
     try {
         logDebug("Recalculating all OHLC daily summaries from intraday ticks for all 5 assets...");
-        await queryD1("DELETE FROM prices");
-        
         const assets = ["XAU_USD", "XAG_USD", "GOLD_MCX", "SILVER_MCX", "GOLD_999_GST"];
-        const now = Date.now();
         
         for (const asset of assets) {
             const dbRes = await queryD1(
@@ -1272,10 +1269,7 @@ async function recalculateAllOHLCFromTicks() {
                         if (t.price > high) high = t.price;
                         if (t.price < low && t.price > 0) low = t.price;
                     });
-                    await queryD1(
-                        "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        [asset, dateStr, open, high, low, close, now]
-                    );
+                    await saveDailySummary(asset, dateStr, open, high, low, close);
                 }
             }
         }
