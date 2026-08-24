@@ -1279,6 +1279,66 @@ async function recalculateAllOHLCFromTicks() {
     }
 }
 
+async function ensureHistoricalBaselines() {
+    try {
+        const timestamp = Date.now();
+        const upsertPriceRow = async (asset, dateStr, open, high, low, close) => {
+            const checkRes = await queryD1("SELECT id FROM prices WHERE asset = ? AND date = ?", [asset, dateStr]);
+            const rows = checkRes.result?.[0]?.results || [];
+            if (rows.length > 0) {
+                await queryD1(
+                    "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
+                    [open, high, low, close, timestamp, rows[0].id]
+                );
+            } else {
+                await queryD1(
+                    "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [asset, dateStr, open, high, low, close, timestamp]
+                );
+            }
+        };
+
+        // Spot Gold (XAU_USD)
+        await upsertPriceRow('XAU_USD', '2026-08-23', 4603.30, 4621.95, 4603.30, 4621.95);
+        await upsertPriceRow('XAU_USD', '2026-08-22', 4603.30, 4603.30, 4603.30, 4603.30);
+        await upsertPriceRow('XAU_USD', '2026-08-21', 4521.45, 4632.55, 4509.85, 4603.30);
+        await upsertPriceRow('XAU_USD', '2026-08-20', 4522.65, 4540.80, 4451.10, 4519.20);
+        await upsertPriceRow('XAU_USD', '2026-08-19', 4333.85, 4525.00, 4325.75, 4522.65);
+
+        // Spot Silver (XAG_USD)
+        await upsertPriceRow('XAG_USD', '2026-08-23', 69.00, 69.24, 69.00, 69.24);
+        await upsertPriceRow('XAG_USD', '2026-08-22', 69.00, 69.00, 69.00, 69.00);
+        await upsertPriceRow('XAG_USD', '2026-08-21', 68.23, 70.03, 67.95, 69.00);
+        await upsertPriceRow('XAG_USD', '2026-08-20', 67.16, 68.99, 65.67, 68.22);
+        await upsertPriceRow('XAG_USD', '2026-08-19', 63.35, 67.17, 62.59, 67.17);
+
+        // GOLD_MCX
+        await upsertPriceRow('GOLD_MCX', '2026-08-23', 162460, 162460, 162460, 162460);
+        await upsertPriceRow('GOLD_MCX', '2026-08-22', 162460, 162460, 162460, 162460);
+        await upsertPriceRow('GOLD_MCX', '2026-08-21', 159878, 162680, 159689, 162460);
+        await upsertPriceRow('GOLD_MCX', '2026-08-20', 158286, 160009, 157059, 159537);
+        await upsertPriceRow('GOLD_MCX', '2026-08-19', 154136, 158235, 153410, 158075);
+
+        // SILVER_MCX
+        await upsertPriceRow('SILVER_MCX', '2026-08-23', 246754, 246754, 246754, 246754);
+        await upsertPriceRow('SILVER_MCX', '2026-08-22', 246754, 246754, 246754, 246754);
+        await upsertPriceRow('SILVER_MCX', '2026-08-21', 244939, 248118, 244380, 246754);
+        await upsertPriceRow('SILVER_MCX', '2026-08-20', 240017, 244997, 235702, 243299);
+        await upsertPriceRow('SILVER_MCX', '2026-08-19', 230300, 237300, 227999, 236780);
+
+        // GOLD_999_GST
+        await upsertPriceRow('GOLD_999_GST', '2026-08-23', 166500, 166500, 166500, 166500);
+        await upsertPriceRow('GOLD_999_GST', '2026-08-22', 166410, 166600, 166150, 166500);
+        await upsertPriceRow('GOLD_999_GST', '2026-08-21', 163778, 166630, 163589, 166410);
+        await upsertPriceRow('GOLD_999_GST', '2026-08-20', 162186, 163909, 160959, 163437);
+        await upsertPriceRow('GOLD_999_GST', '2026-08-19', 157986, 162135, 157310, 161975);
+
+        logDebug("[BASELINES] All 5 assets' historical baselines ensured.");
+    } catch (e) {
+        logDebug(`[BASELINES ERROR] ${e.message}`);
+    }
+}
+
 // Create database indexes on launch to optimize queries
 async function initDatabaseIndexes() {
     try {
@@ -1286,6 +1346,7 @@ async function initDatabaseIndexes() {
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         
+        await ensureHistoricalBaselines();
         await recalculateAllOHLCFromTicks();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
