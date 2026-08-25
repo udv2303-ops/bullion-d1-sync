@@ -781,16 +781,7 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     }
 
     if (targetIds.length === 0) {
-        try {
-            const groupMap = await waSock.groupFetchAllParticipating();
-            targetIds = Object.keys(groupMap);
-        } catch (ge) {
-            logWa(`[WA GROUP FETCH WARNING] ${ge.message}`);
-        }
-    }
-
-    if (targetIds.length === 0) {
-        throw new Error("No target WhatsApp Group ID configured. Select target group in app or API.");
+        throw new Error("No target WhatsApp Group selected. Please select at least one group in App.");
     }
 
     const selectedScripts = config.selectedScripts || ['GOLD_999_GST'];
