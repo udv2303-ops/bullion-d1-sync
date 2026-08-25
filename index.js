@@ -841,21 +841,45 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     for (let i = 0; i < targetIds.length; i++) {
         const gid = targetIds[i];
         const formattedJid = gid.includes('@') ? gid : `${gid}@g.us`;
-        try {
-            logWa(`[WA BROADCAST ${i + 1}/${targetIds.length}] Sending to group: ${formattedJid}...`);
-            await waSock.sendMessage(formattedJid, { text: messageText });
-            logWa(`[WA SENT SUCCESS ${i + 1}/${targetIds.length}] Sent to group: ${formattedJid}`);
-            sendResults.push({ groupId: formattedJid, success: true });
-        } catch (err) {
-            logWa(`[WA SEND ERROR ${i + 1}/${targetIds.length}] Failed to send to group ${formattedJid}: ${err.message}`);
-            sendResults.push({ groupId: formattedJid, success: false, error: err.message });
+        let groupSuccess = false;
+        let lastErr = null;
+
+        // Up to 3 retries per group with socket recovery delay
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                if (!isWaConnected || !waSock) {
+                    logWa(`[WA BROADCAST ${i + 1}/${targetIds.length}] Waiting 2s for WhatsApp socket recovery (attempt ${attempt}/3)...`);
+                    await new Promise(r => setTimeout(r, 2000));
+                    if (!waSock) throw new Error("Socket disconnected during broadcast");
+                }
+                logWa(`[WA BROADCAST ${i + 1}/${targetIds.length}] Sending to group ${formattedJid} (attempt ${attempt}/3)...`);
+                await waSock.sendMessage(formattedJid, { text: messageText });
+                logWa(`[WA SENT SUCCESS ${i + 1}/${targetIds.length}] ✅ Sent to group: ${formattedJid}`);
+                groupSuccess = true;
+                sendResults.push({ groupId: formattedJid, success: true, attempts: attempt });
+                break;
+            } catch (err) {
+                lastErr = err;
+                logWa(`[WA SEND WARN ${i + 1}/${targetIds.length}] Attempt ${attempt}/3 failed for ${formattedJid}: ${err.message}`);
+                if (attempt < 3) {
+                    await new Promise(r => setTimeout(r, 2500));
+                }
+            }
         }
+
+        if (!groupSuccess) {
+            logWa(`[WA SEND ERROR ${i + 1}/${targetIds.length}] ❌ All 3 attempts failed for group ${formattedJid}: ${lastErr?.message}`);
+            sendResults.push({ groupId: formattedJid, success: false, error: lastErr?.message || 'Failed after 3 attempts' });
+        }
+
         if (i < targetIds.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 2500));
         }
     }
 
-    return { success: sendResults.some(r => r.success), targetCount: targetIds.length, sentCount: sendResults.filter(r => r.success).length, sendResults, messageText };
+    const sentCount = sendResults.filter(r => r.success).length;
+    const allSuccess = sentCount === targetIds.length && targetIds.length > 0;
+    return { success: allSuccess, targetCount: targetIds.length, sentCount, sendResults, messageText };
 }
 
 function normalizeTimeStr(tStr) {
