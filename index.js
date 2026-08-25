@@ -593,8 +593,11 @@ function loadWaConfig() {
         customTemplate: DEFAULT_WA_TEMPLATE,
         autoSendEnabled: true,
         autoSendTime: '11:00',
+        autoSendTimes: ['11:00'],
         skipSunday: true,
-        selectedScripts: ['GOLD_999_GST']
+        selectedScripts: ['GOLD_999_GST'],
+        lastSentKey: '',
+        lastSentKeys: []
     };
     try {
         if (fs.existsSync(WA_CONFIG_FILE)) {
