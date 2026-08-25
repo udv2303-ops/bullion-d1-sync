@@ -605,16 +605,33 @@ function loadWaConfig() {
             } else if (parsed.targetGroupId) {
                 gIds = [parsed.targetGroupId];
             }
+            let timesList = [];
+            if (Array.isArray(parsed.autoSendTimes) && parsed.autoSendTimes.length > 0) {
+                timesList = parsed.autoSendTimes;
+            } else if (parsed.autoSendTime) {
+                timesList = [parsed.autoSendTime];
+            } else {
+                timesList = ['11:00'];
+            }
+            timesList = Array.from(new Set(timesList.map(t => normalizeTimeStr(t)).filter(t => t.length > 0)));
+
+            let sentKeysList = Array.isArray(parsed.lastSentKeys) ? parsed.lastSentKeys : [];
+            if (parsed.lastSentKey && !sentKeysList.includes(parsed.lastSentKey)) {
+                sentKeysList.push(parsed.lastSentKey);
+            }
+
             cfg = {
                 targetGroupId: gIds[0] || parsed.targetGroupId || '',
                 targetGroupIds: gIds,
                 customHeader: parsed.customHeader || '⭐ *HARIKALA BULLION LLP* ⭐',
                 customTemplate: parsed.customTemplate || DEFAULT_WA_TEMPLATE,
                 autoSendEnabled: parsed.autoSendEnabled !== undefined ? parsed.autoSendEnabled : (parsed.autoSend11Am !== undefined ? parsed.autoSend11Am : true),
-                autoSendTime: parsed.autoSendTime || '11:00',
+                autoSendTime: timesList[0] || '11:00',
+                autoSendTimes: timesList,
                 skipSunday: parsed.skipSunday !== undefined ? parsed.skipSunday : true,
                 selectedScripts: Array.isArray(parsed.selectedScripts) && parsed.selectedScripts.length > 0 ? parsed.selectedScripts : ['GOLD_999_GST'],
-                lastSentKey: parsed.lastSentKey || ''
+                lastSentKey: parsed.lastSentKey || '',
+                lastSentKeys: sentKeysList
             };
         }
     } catch (e) {
@@ -850,25 +867,31 @@ setInterval(async () => {
             return; // Do not auto-send on Sundays!
         }
 
-        const targetTime = config.autoSendTime || '11:00';
+        const timesList = config.autoSendTimes && config.autoSendTimes.length > 0 ? config.autoSendTimes : [config.autoSendTime || '11:00'];
         const normCurr = normalizeTimeStr(timeFormatted);
-        const normTarget = normalizeTimeStr(targetTime);
-        const sendKey = `${todayIstStr}_${normTarget}`;
+        const sentKeys = Array.isArray(config.lastSentKeys) ? [...config.lastSentKeys] : (config.lastSentKey ? [config.lastSentKey] : []);
 
-        // PERSISTENT DEDUPLICATION LOCK: Prevent duplicate auto-sends across server restarts!
-        if (config.lastSentKey === sendKey) {
-            return;
-        }
+        for (const tTime of timesList) {
+            const normTarget = normalizeTimeStr(tTime);
+            const sendKey = `${todayIstStr}_${normTarget}`;
 
-        if (normCurr === normTarget) {
-            logWa(`[WA SCHEDULER] ⏰ Match found! Current IST: ${normCurr}, Target Time: ${normTarget}. Triggering rate send...`);
-            // Instantly save lastSentKey to disk to prevent any duplicate dispatch if tick re-runs or server reboots!
-            saveWaConfig({ ...config, lastSentKey: sendKey });
-            try {
-                const res = await sendGoldGstRateMessage();
-                logWa(`[WA SCHEDULER SUCCESS] ✅ Rate message sent successfully at ${normCurr} IST!`);
-            } catch (sendErr) {
-                logWa(`[WA SCHEDULER ERROR] ❌ Failed to send rate message: ${sendErr.message}`);
+            if (sentKeys.includes(sendKey)) {
+                continue; // Already sent today for this time!
+            }
+
+            if (normCurr === normTarget) {
+                logWa(`[WA SCHEDULER] ⏰ Match found! Current IST: ${normCurr}, Target Time: ${normTarget}. Triggering rate send...`);
+                
+                // Immediately update persistent lastSentKeys lock
+                const updatedSentKeys = Array.from(new Set([...sentKeys, sendKey]));
+                saveWaConfig({ ...config, lastSentKey: sendKey, lastSentKeys: updatedSentKeys });
+                
+                try {
+                    const res = await sendGoldGstRateMessage();
+                    logWa(`[WA SCHEDULER SUCCESS] ✅ Rate message sent successfully at ${normCurr} IST for time ${normTarget}!`);
+                } catch (sendErr) {
+                    logWa(`[WA SCHEDULER ERROR] ❌ Failed to send rate message for time ${normTarget}: ${sendErr.message}`);
+                }
             }
         }
     } catch (e) {
