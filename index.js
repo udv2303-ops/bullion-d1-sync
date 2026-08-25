@@ -557,6 +557,9 @@ let waConnectedUser = null;
 let lastSent11AmDate = '';
 const waSchedulerLogs = [];
 
+let isWaInitializing = false;
+let waReconnectTimer = null;
+
 function logWa(msg) {
     const istNow = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
     const entry = `[IST ${istNow}] ${msg}`;
@@ -653,8 +656,30 @@ function saveWaConfig(cfg) {
 }
 
 async function initWhatsApp() {
+    if (isWaInitializing) {
+        logDebug('[WA] Init call skipped: Initialization already in progress.');
+        return;
+    }
+    isWaInitializing = true;
+
+    if (waReconnectTimer) {
+        clearTimeout(waReconnectTimer);
+        waReconnectTimer = null;
+    }
+
     try {
         logDebug('[WA] Initializing Baileys WhatsApp client...');
+        
+        // Safely close and strip previous socket instance if any
+        if (waSock) {
+            try {
+                waSock.ev.removeAllListeners('connection.update');
+                waSock.ev.removeAllListeners('creds.update');
+                waSock.end(undefined);
+            } catch (se) {}
+            waSock = null;
+        }
+
         const authFolder = path.join(__dirname, 'auth_info_baileys');
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
         
@@ -692,36 +717,47 @@ async function initWhatsApp() {
             if (connection === 'close') {
                 latestQrCode = null;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+                const isReplaced = statusCode === DisconnectReason.connectionReplaced;
+
                 logDebug(`[WA] Connection closed: ${lastDisconnect?.error?.message || 'closed'} (code ${statusCode}).`);
                 
-                if (statusCode === DisconnectReason.loggedOut) {
+                if (isLoggedOut || isReplaced) {
                     isWaConnected = false;
                     waConnectedUser = null;
-                    logDebug('[WA] Explicitly logged out. Clearing credentials folder...');
+                    logDebug('[WA] Logged out or session replaced. Clearing credentials folder...');
                     try {
                         fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
                     } catch (e) {}
                 } else {
-                    // Smooth socket reconnect: keep isWaConnected true if credentials exist
-                    const authFolder = path.join(__dirname, 'auth_info_baileys');
                     const credsExist = fs.existsSync(path.join(authFolder, 'creds.json'));
                     if (!credsExist) {
                         isWaConnected = false;
                     }
                 }
                 
-                // Reconnect immediately to finalize login or refresh socket
-                setTimeout(initWhatsApp, 1500);
+                // Reconnect cleanly using single-instance guarded timer
+                if (!isLoggedOut && !waReconnectTimer) {
+                    waReconnectTimer = setTimeout(() => {
+                        waReconnectTimer = null;
+                        isWaInitializing = false;
+                        initWhatsApp();
+                    }, 3000);
+                } else {
+                    isWaInitializing = false;
+                }
             } else if (connection === 'connecting') {
                 logDebug('[WA] Connecting to WhatsApp servers...');
             } else if (connection === 'open') {
                 isWaConnected = true;
                 latestQrCode = null;
+                isWaInitializing = false;
                 waConnectedUser = waSock.user?.name || waSock.user?.id || 'Connected User';
                 logDebug(`[WA] ✅ WhatsApp Connected Successfully! User: ${waConnectedUser}`);
             }
         });
     } catch (e) {
+        isWaInitializing = false;
         logDebug(`[WA INIT ERROR] ${e.message}`);
     }
 }
@@ -1224,9 +1260,19 @@ http.createServer(async (req, res) => {
             isWaConnected = false;
             latestQrCode = null;
             waConnectedUser = null;
+            if (waReconnectTimer) {
+                clearTimeout(waReconnectTimer);
+                waReconnectTimer = null;
+            }
+            isWaInitializing = false;
             try {
                 if (waSock) {
-                    try { waSock.end(new Error("Manual Reset")); } catch (e) {}
+                    try {
+                        waSock.ev.removeAllListeners('connection.update');
+                        waSock.ev.removeAllListeners('creds.update');
+                        waSock.end(undefined);
+                    } catch (e) {}
+                    waSock = null;
                 }
                 fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
             } catch (e) {
