@@ -860,6 +860,7 @@ function getIstTimeInfo() {
 
 // Configurable Daily WhatsApp Auto-Sender Loop
 let lastSentWaKey = "";
+const activeSendsInProgress = new Set();
 
 setInterval(async () => {
     try {
@@ -870,8 +871,8 @@ setInterval(async () => {
             return;
         }
 
-        if (!isWaConnected) {
-            return;
+        if (!isWaConnected || !waSock) {
+            return; // Wait until WhatsApp socket is connected
         }
 
         if (config.skipSunday && isSunday) {
@@ -887,21 +888,33 @@ setInterval(async () => {
             const sendKey = `${todayIstStr}_${normTarget}`;
 
             if (sentKeys.includes(sendKey)) {
-                continue; // Already sent today for this time!
+                continue; // Already successfully sent today for this time!
+            }
+
+            if (activeSendsInProgress.has(sendKey)) {
+                continue; // Dispatch already in progress for this key
             }
 
             if (normCurr === normTarget) {
                 logWa(`[WA SCHEDULER] ⏰ Match found! Current IST: ${normCurr}, Target Time: ${normTarget}. Triggering rate send...`);
                 
-                // Immediately update persistent lastSentKeys lock
-                const updatedSentKeys = Array.from(new Set([...sentKeys, sendKey]));
-                saveWaConfig({ ...config, lastSentKey: sendKey, lastSentKeys: updatedSentKeys });
-                
+                activeSendsInProgress.add(sendKey);
                 try {
                     const res = await sendGoldGstRateMessage();
-                    logWa(`[WA SCHEDULER SUCCESS] ✅ Rate message sent successfully at ${normCurr} IST for time ${normTarget}!`);
+                    if (res && res.success) {
+                        // ONLY mark sendKey as SENT after successful dispatch!
+                        const freshConfig = loadWaConfig();
+                        const currentSent = Array.isArray(freshConfig.lastSentKeys) ? freshConfig.lastSentKeys : [];
+                        const updatedSentKeys = Array.from(new Set([...currentSent, sendKey]));
+                        saveWaConfig({ ...freshConfig, lastSentKey: sendKey, lastSentKeys: updatedSentKeys });
+                        logWa(`[WA SCHEDULER SUCCESS] ✅ Rate message sent successfully at ${normCurr} IST for time ${normTarget}! (Targets: ${res.sentCount}/${res.targetCount})`);
+                    } else {
+                        logWa(`[WA SCHEDULER WARN] ⚠️ Rate message send attempted at ${normCurr} IST for time ${normTarget} but result was not successful. Will retry in next 10s tick within minute window.`);
+                    }
                 } catch (sendErr) {
                     logWa(`[WA SCHEDULER ERROR] ❌ Failed to send rate message for time ${normTarget}: ${sendErr.message}`);
+                } finally {
+                    activeSendsInProgress.delete(sendKey);
                 }
             }
         }
