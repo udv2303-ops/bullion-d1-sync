@@ -690,16 +690,24 @@ async function initWhatsApp() {
                 logDebug('[WA] New QR code generated. Ready to scan.');
             }
             if (connection === 'close') {
-                isWaConnected = false;
                 latestQrCode = null;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 logDebug(`[WA] Connection closed: ${lastDisconnect?.error?.message || 'closed'} (code ${statusCode}).`);
                 
                 if (statusCode === DisconnectReason.loggedOut) {
+                    isWaConnected = false;
+                    waConnectedUser = null;
                     logDebug('[WA] Explicitly logged out. Clearing credentials folder...');
                     try {
                         fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
                     } catch (e) {}
+                } else {
+                    // Smooth socket reconnect: keep isWaConnected true if credentials exist
+                    const authFolder = path.join(__dirname, 'auth_info_baileys');
+                    const credsExist = fs.existsSync(path.join(authFolder, 'creds.json'));
+                    if (!credsExist) {
+                        isWaConnected = false;
+                    }
                 }
                 
                 // Reconnect immediately to finalize login or refresh socket
