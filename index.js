@@ -1208,65 +1208,105 @@ http.createServer(async (req, res) => {
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>Scan WhatsApp QR Code</title>
+                    <title>WhatsApp Web Integration</title>
                     <meta name="viewport" content="width=device-width, initial-scale=1">
                     <style>
                         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; padding: 24px; background-color: #f9fafb; color: #111827; }
-                        .card { max-width: 380px; margin: 0 auto; background: white; border-radius: 20px; padding: 24px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08); border: 1px solid #e5e7eb; }
+                        .card { max-width: 400px; margin: 0 auto; background: white; border-radius: 20px; padding: 28px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08); border: 1px solid #e5e7eb; }
                         .qr-box { display: inline-block; padding: 12px; background: white; border: 4px solid #10b981; border-radius: 16px; margin: 16px 0; }
                         img { width: 250px; height: 250px; display: block; border-radius: 8px; }
                         .status { font-weight: 600; font-size: 14px; color: #059669; }
+                        .btn-red { background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 14px; transition: background 0.2s; }
+                        .btn-red:hover { background: #b91c1c; }
+                        .btn-red:disabled { background: #9ca3af; cursor: not-allowed; }
                     </style>
                 </head>
                 <body>
                     <div class="card" id="mainCard">
-                        <h2 style="margin-top:0; color:#1f2937;">Connect WhatsApp</h2>
-                        <p style="color:#6b7280; font-size:13.5px; line-height:1.4;">Open WhatsApp on phone &gt; Settings/Menu &gt; Linked Devices &gt; Link a Device</p>
+                        <h2 id="cardTitle" style="margin-top:0; color:#1f2937;">Connect WhatsApp</h2>
+                        <p id="cardSub" style="color:#6b7280; font-size:13.5px; line-height:1.4;">Open WhatsApp on phone &gt; Settings/Menu &gt; Linked Devices &gt; Link a Device</p>
                         
-                        <div class="qr-box">
+                        <div class="qr-box" id="qrContainer">
                             <img id="qrImg" src="" alt="Loading QR Code..." />
                         </div>
                         
                         <p class="status" id="statusText">Generating Live QR Code...</p>
                         
-                        <div style="margin-top: 20px;">
-                            <button onclick="resetWaSession()" style="background: #ef4444; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px;">🔄 Generate Fresh QR Code</button>
+                        <div style="margin-top: 20px;" id="btnContainer">
+                            <button onclick="resetWaSession()" class="btn-red" id="actionBtn">🔄 Generate Fresh QR Code</button>
                         </div>
                     </div>
 
                     <script>
+                        let isResetting = false;
+
                         async function resetWaSession() {
-                            document.getElementById('statusText').innerText = "Resetting session & generating new QR...";
+                            if (isResetting) return;
+                            isResetting = true;
+                            const statusEl = document.getElementById('statusText');
+                            const actionBtn = document.getElementById('actionBtn');
+                            if (statusEl) statusEl.innerText = "Resetting session & generating new QR...";
+                            if (actionBtn) {
+                                actionBtn.disabled = true;
+                                actionBtn.innerText = "⏳ Resetting Session...";
+                            }
                             try {
-                                await fetch('/api/whatsapp/reset');
-                                setTimeout(updateQr, 2000);
+                                const r = await fetch('/api/whatsapp/reset');
+                                const resData = await r.json();
+                                setTimeout(() => {
+                                    isResetting = false;
+                                    updateQr();
+                                }, 2000);
                             } catch(e) {
+                                isResetting = false;
                                 alert("Reset failed: " + e.message);
+                                if (actionBtn) {
+                                    actionBtn.disabled = false;
+                                    actionBtn.innerText = "🔌 Disconnect / Unlink WhatsApp";
+                                }
                             }
                         }
 
                         async function updateQr() {
+                            if (isResetting) return;
                             try {
                                 const res = await fetch('/api/whatsapp/qr-data');
                                 const data = await res.json();
-                                const card = document.getElementById('mainCard');
+                                
+                                const titleEl = document.getElementById('cardTitle');
+                                const subEl = document.getElementById('cardSub');
+                                const qrContainer = document.getElementById('qrContainer');
+                                const statusEl = document.getElementById('statusText');
+                                const actionBtn = document.getElementById('actionBtn');
                                 
                                 if (data.connected) {
-                                    card.innerHTML = \`
-                                        <h1 style="color: #16a34a; margin-top: 10px;">✅ WhatsApp Connected!</h1>
-                                        <p style="font-size: 16px; color: #374151;">User: <strong>\${data.user || 'Active'}</strong></p>
-                                        <p style="color: #6b7280; font-size: 13px;">Daily 11:00 AM GST Rate messages will auto-send to your target group.</p>
-                                        <button onclick="resetWaSession()" style="background: #dc2626; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; margin-top: 15px;">Disconnect / Unlink WhatsApp</button>
-                                    \`;
+                                    if (titleEl) { titleEl.innerText = "✅ WhatsApp Connected!"; titleEl.style.color = "#16a34a"; }
+                                    if (subEl) { subEl.innerHTML = "User: <strong>" + (data.user || 'Active User') + "</strong><br>Scheduled rate messages will auto-send to your selected target groups."; }
+                                    if (qrContainer) { qrContainer.style.display = "none"; }
+                                    if (statusEl) { statusEl.innerText = "Status: Connected & Active"; statusEl.style.color = "#16a34a"; }
+                                    if (actionBtn) {
+                                        actionBtn.disabled = false;
+                                        actionBtn.innerText = "🔌 Disconnect / Unlink WhatsApp";
+                                    }
                                 } else if (data.qr) {
+                                    if (titleEl) { titleEl.innerText = "Connect WhatsApp"; titleEl.style.color = "#1f2937"; }
+                                    if (subEl) { subEl.innerText = "Open WhatsApp on phone > Settings/Menu > Linked Devices > Link a Device"; }
+                                    if (qrContainer) { qrContainer.style.display = "inline-block"; }
                                     const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(data.qr);
                                     const img = document.getElementById('qrImg');
-                                    if (img.src !== qrUrl) {
-                                        img.src = qrUrl;
+                                    if (img && img.src !== qrUrl) { img.src = qrUrl; }
+                                    if (statusEl) { statusEl.innerText = "Live QR Code • Ready to Scan"; statusEl.style.color = "#059669"; }
+                                    if (actionBtn) {
+                                        actionBtn.disabled = false;
+                                        actionBtn.innerText = "🔄 Generate Fresh QR Code";
                                     }
-                                    document.getElementById('statusText').innerText = "Live QR Code • Ready to Scan";
                                 } else {
-                                    document.getElementById('statusText').innerText = "Waiting for new QR code... (Click 'Generate Fresh QR Code' if stuck)";
+                                    if (qrContainer) { qrContainer.style.display = "inline-block"; }
+                                    if (statusEl) { statusEl.innerText = "Waiting for new QR code..."; statusEl.style.color = "#6b7280"; }
+                                    if (actionBtn) {
+                                        actionBtn.disabled = false;
+                                        actionBtn.innerText = "🔄 Generate Fresh QR Code";
+                                    }
                                 }
                             } catch (e) {
                                 console.error(e);
