@@ -1299,6 +1299,9 @@ http.createServer(async (req, res) => {
                     waSock = null;
                 }
                 fs.rmSync(path.join(__dirname, 'auth_info_baileys'), { recursive: true, force: true });
+                // Reset saved target groups on session reset
+                const currCfg = loadWaConfig();
+                saveWaConfig({ ...currCfg, targetGroupId: '', targetGroupIds: [] });
             } catch (e) {
                 logDebug(`[WA RESET ERROR] ${e.message}`);
             }
@@ -1340,6 +1343,18 @@ http.createServer(async (req, res) => {
             }
             try {
                 const groupMap = await waSock.groupFetchAllParticipating();
+                const activeGroupIds = new Set(Object.keys(groupMap));
+                
+                // Auto-purge stale target group IDs from previous WhatsApp accounts
+                const currCfg = loadWaConfig();
+                if (Array.isArray(currCfg.targetGroupIds) && currCfg.targetGroupIds.length > 0) {
+                    const validGroupIds = currCfg.targetGroupIds.filter(id => activeGroupIds.has(id));
+                    if (validGroupIds.length !== currCfg.targetGroupIds.length) {
+                        logDebug(`[WA CONFIG PURGE] Purged ${currCfg.targetGroupIds.length - validGroupIds.length} stale group ID(s) from previous account.`);
+                        saveWaConfig({ ...currCfg, targetGroupIds: validGroupIds, targetGroupId: validGroupIds[0] || '' });
+                    }
+                }
+
                 const groupsList = Object.values(groupMap)
                     .filter(g => !g.isCommunity) // Exclude Community parent containers that cannot receive direct chat messages
                     .map(g => ({
