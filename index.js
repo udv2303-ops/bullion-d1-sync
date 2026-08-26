@@ -835,7 +835,8 @@ async function sendGoldGstRateMessage(customGroupId = null) {
         let groupSuccess = false;
         let lastErr = null;
 
-        // Up to 3 retries per group with socket recovery delay
+        // Up to 3 retries per group with socket recovery delay (skip retries if forbidden)
+        let isForbidden = false;
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
                 if (!isWaConnected || !waSock) {
@@ -851,7 +852,13 @@ async function sendGoldGstRateMessage(customGroupId = null) {
                 break;
             } catch (err) {
                 lastErr = err;
-                logWa(`[WA SEND WARN ${i + 1}/${targetIds.length}] Attempt ${attempt}/3 failed for ${formattedJid}: ${err.message}`);
+                const errMsg = err?.message || String(err);
+                if (errMsg.toLowerCase().includes('forbidden') || errMsg.toLowerCase().includes('not-authorized') || errMsg.toLowerCase().includes('not in group')) {
+                    isForbidden = true;
+                    logWa(`[WA PERMISSION WARN ${i + 1}/${targetIds.length}] ⛔ Account does not have permission to post in group ${formattedJid} (forbidden). Skipping retries.`);
+                    break;
+                }
+                logWa(`[WA SEND WARN ${i + 1}/${targetIds.length}] Attempt ${attempt}/3 failed for ${formattedJid}: ${errMsg}`);
                 if (attempt < 3) {
                     await new Promise(r => setTimeout(r, 2500));
                 }
@@ -859,8 +866,8 @@ async function sendGoldGstRateMessage(customGroupId = null) {
         }
 
         if (!groupSuccess) {
-            logWa(`[WA SEND ERROR ${i + 1}/${targetIds.length}] ❌ All 3 attempts failed for group ${formattedJid}: ${lastErr?.message}`);
-            sendResults.push({ groupId: formattedJid, success: false, error: lastErr?.message || 'Failed after 3 attempts' });
+            logWa(`[WA SEND ERROR ${i + 1}/${targetIds.length}] ❌ Group ${formattedJid} failed: ${lastErr?.message}`);
+            sendResults.push({ groupId: formattedJid, success: false, isForbidden, error: lastErr?.message || 'Failed' });
         }
 
         if (i < targetIds.length - 1) {
@@ -869,8 +876,10 @@ async function sendGoldGstRateMessage(customGroupId = null) {
     }
 
     const sentCount = sendResults.filter(r => r.success).length;
-    const allSuccess = sentCount === targetIds.length && targetIds.length > 0;
-    return { success: allSuccess, targetCount: targetIds.length, sentCount, sendResults, messageText };
+    const handledCount = sendResults.filter(r => r.success || r.isForbidden).length;
+    const isCompleted = handledCount === targetIds.length && sentCount > 0;
+
+    return { success: isCompleted, targetCount: targetIds.length, sentCount, sendResults, messageText };
 }
 
 function normalizeTimeStr(tStr) {
