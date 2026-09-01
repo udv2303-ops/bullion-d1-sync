@@ -183,28 +183,18 @@ function getTimestampRangeForDate(asset, dateStr) {
     return { startMs, endMs };
 }
 
-const lastTickTimes = {};
-
 async function saveIntradayTick(asset, price) {
     const currentPrice = toDoubleSafe(price);
     if (currentPrice <= 0.0) return;
 
-    const lastP = lastPrices[asset] || 0.0;
-    const now = Date.now();
-    const lastTickTime = lastTickTimes[asset] || 0;
-    
-    // Skip duplicate unchanged tick within 30 seconds to conserve D1 write quota
-    if (currentPrice === lastP && (now - lastTickTime) < 30000) {
-        return;
-    }
-
+    // Record ticks unconditionally every 10 seconds as requested (even if rate is unchanged)
     lastPrices[asset] = currentPrice;
-    lastTickTimes[asset] = now;
+    const timestamp = Date.now();
 
     try {
         await queryD1(
             "INSERT INTO intraday_prices (asset, price, timestamp) VALUES (?, ?, ?)",
-            [asset, currentPrice, now]
+            [asset, currentPrice, timestamp]
         );
         logDebug(`[TICK] Inserted ${asset}: ${currentPrice}`);
     } catch (e) {
