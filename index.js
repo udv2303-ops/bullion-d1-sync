@@ -183,19 +183,28 @@ function getTimestampRangeForDate(asset, dateStr) {
     return { startMs, endMs };
 }
 
+const lastTickTimes = {};
+
 async function saveIntradayTick(asset, price) {
     const currentPrice = toDoubleSafe(price);
     if (currentPrice <= 0.0) return;
 
-    // We record ticks unconditionally every 10 seconds as requested (even if the rate is identical)
+    const lastP = lastPrices[asset] || 0.0;
+    const now = Date.now();
+    const lastTickTime = lastTickTimes[asset] || 0;
+    
+    // Skip duplicate unchanged tick within 30 seconds to conserve D1 write quota
+    if (currentPrice === lastP && (now - lastTickTime) < 30000) {
+        return;
+    }
 
     lastPrices[asset] = currentPrice;
-    const timestamp = Date.now();
+    lastTickTimes[asset] = now;
 
     try {
         await queryD1(
             "INSERT INTO intraday_prices (asset, price, timestamp) VALUES (?, ?, ?)",
-            [asset, currentPrice, timestamp]
+            [asset, currentPrice, now]
         );
         logDebug(`[TICK] Inserted ${asset}: ${currentPrice}`);
     } catch (e) {
@@ -203,75 +212,63 @@ async function saveIntradayTick(asset, price) {
     }
 }
 
+const inMemoryOhlc = {};
+
 async function saveDailySummary(asset, dateStr, open, high, low, close) {
     try {
         const timestamp = Date.now();
-        let targetHigh = high;
-        let targetLow = low;
-        let targetOpen = open;
-
         const isCorruptedOpen = (val) => (!val || val <= 0 || val === 4521.45 || val === 4522.65 || val === 4333.85);
 
-        const range = getTimestampRangeForDate(asset, dateStr);
-        if (range) {
-            const firstTickRes = await queryD1(
-                "SELECT CAST(price AS REAL) as price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1",
-                [asset, range.startMs, range.endMs]
+        if (!inMemoryOhlc[asset] || inMemoryOhlc[asset].date !== dateStr) {
+            let initOpen = open;
+            let initHigh = high;
+            let initLow = low;
+            
+            const checkRes = await queryD1(
+                "SELECT id, open, high, low, close FROM prices WHERE asset = ? AND date = ? ORDER BY id DESC LIMIT 1",
+                [asset, dateStr]
             );
-            const firstRow = firstTickRes.result?.[0]?.results?.[0];
-            if (firstRow && firstRow.price > 0 && isCorruptedOpen(targetOpen)) {
-                targetOpen = firstRow.price;
+            const rows = checkRes.result?.[0]?.results || [];
+            if (rows.length > 0) {
+                const existing = rows[0];
+                initOpen = !isCorruptedOpen(existing.open) ? existing.open : (!isCorruptedOpen(open) ? open : close);
+                initHigh = Math.max(existing.high || 0.0, high || 0.0, close);
+                initLow = (existing.low > 0 && low > 0) ? Math.min(existing.low, low) : (existing.low || low || close);
+                inMemoryOhlc[asset] = { id: existing.id, date: dateStr, open: initOpen, high: initHigh, low: initLow, close };
+            } else {
+                initOpen = !isCorruptedOpen(open) ? open : close;
+                initHigh = Math.max(high || 0.0, close);
+                initLow = low > 0 ? low : close;
+                const insRes = await queryD1(
+                    "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [asset, dateStr, initOpen, initHigh, initLow, close, timestamp]
+                );
+                const newId = insRes.result?.[0]?.meta?.last_row_id;
+                inMemoryOhlc[asset] = { id: newId, date: dateStr, open: initOpen, high: initHigh, low: initLow, close };
             }
-
-            const tickRes = await queryD1(
-                "SELECT MAX(CAST(price AS REAL)) as max_price, MIN(CAST(price AS REAL)) as min_price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ?",
-                [asset, range.startMs, range.endMs]
-            );
-            const tickRow = tickRes.result?.[0]?.results?.[0];
-            if (tickRow && tickRow.max_price > 0) {
-                targetHigh = Math.max(targetHigh, tickRow.max_price);
-                targetLow = tickRow.min_price > 0 ? tickRow.min_price : targetLow;
+        } else {
+            const cached = inMemoryOhlc[asset];
+            if (isCorruptedOpen(cached.open) && !isCorruptedOpen(open)) {
+                cached.open = open;
             }
+            cached.high = Math.max(cached.high || 0.0, high || 0.0, close);
+            if (low > 0) {
+                cached.low = cached.low > 0 ? Math.min(cached.low, low) : low;
+            }
+            cached.close = close;
         }
 
-        if (targetHigh <= 0) targetHigh = close;
-        if (targetLow <= 0) targetLow = close;
-
-        const checkRes = await queryD1(
-            "SELECT id, open, high, low FROM prices WHERE asset = ? AND date = ? ORDER BY id DESC",
-            [asset, dateStr]
-        );
-        const rows = checkRes.result?.[0]?.results || [];
-
-        if (rows.length > 0) {
-            const existing = rows[0];
-
-            // Delete any extra duplicate rows for this asset and date
-            if (rows.length > 1) {
-                for (let i = 1; i < rows.length; i++) {
-                    await queryD1("DELETE FROM prices WHERE id = ?", [rows[i].id]);
-                }
-            }
-
-            // CRITICAL LOCK: Preserve existing valid open price! Never overwrite valid open with live ticks!
-            let updatedOpen = existing.open;
-            if (isCorruptedOpen(existing.open)) {
-                updatedOpen = !isCorruptedOpen(targetOpen) ? targetOpen : close;
-            }
-
-            const updatedHigh = Math.max(existing.high || 0.0, targetHigh, close);
-            // CRITICAL FIX: LOW is strictly determined by exact intraday tick log min_price!
-            const updatedLow = (targetLow > 0) ? targetLow : (existing.low > 0 ? existing.low : close);
-
+        const current = inMemoryOhlc[asset];
+        
+        if (current.id) {
             await queryD1(
                 "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
-                [updatedOpen, updatedHigh, updatedLow, close, timestamp, existing.id]
+                [current.open, current.high, current.low, current.close, timestamp, current.id]
             );
         } else {
-            const finalOpen = !isCorruptedOpen(targetOpen) ? targetOpen : close;
             await queryD1(
-                "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [asset, dateStr, finalOpen, targetHigh, targetLow, close, timestamp]
+                "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE asset = ? AND date = ?",
+                [current.open, current.high, current.low, current.close, timestamp, asset, dateStr]
             );
         }
     } catch (e) {
@@ -1605,11 +1602,7 @@ async function initDatabaseIndexes() {
         logDebug("Initializing D1 Database indexes...");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
-        
-        await deduplicateD1PricesTable();
         await ensureHistoricalBaselines();
-        await recalculateAllOHLCFromTicks();
-        await deduplicateD1PricesTable();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
     }
@@ -1618,14 +1611,6 @@ async function initDatabaseIndexes() {
 // Run immediately on launch
 (async () => {
     await initDatabaseIndexes();
-    try {
-        logDebug("Syncing 3-year historical OHLC for GOLD_MCX, SILVER_MCX, and GOLD_999_GST...");
-        await syncMcxAsset("GOLD_MCX", "GOLD", true);
-        await syncMcxAsset("SILVER_MCX", "SILVER", true);
-        logDebug("Historical OHLC sync completed successfully.");
-    } catch (err) {
-        logDebug(`Error syncing MCX history: ${err.message}`);
-    }
     initWhatsApp();
     runSyncCycle();
 })();
