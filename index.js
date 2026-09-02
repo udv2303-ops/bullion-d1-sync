@@ -970,6 +970,10 @@ setInterval(async () => {
     }
 }, 10000);
 
+// In-memory response cache for /api/live endpoint
+let liveCacheData = null;
+let lastLiveCacheTime = 0;
+
 // Start HTTP server for Render health checks and secure API proxy endpoints
 const PORT = process.env.PORT || 10000;
 http.createServer(async (req, res) => {
@@ -991,24 +995,22 @@ http.createServer(async (req, res) => {
 
     try {
         if (path === '/api/live') {
-            const spotDate = getSpotAssetDateString();
-            const range = getTimestampRangeForDate("XAU_USD", spotDate);
-            if (range) {
-                await queryD1(
-                    "UPDATE prices SET open = (SELECT CAST(price AS REAL) FROM intraday_prices WHERE asset = 'XAU_USD' AND CAST(timestamp AS INTEGER) >= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1), high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND CAST(timestamp AS INTEGER) >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAU_USD' AND CAST(timestamp AS INTEGER) >= ?) WHERE asset = 'XAU_USD' AND date = ?",
-                    [range.startMs, range.startMs, range.startMs, spotDate]
-                );
-                await queryD1(
-                    "UPDATE prices SET open = (SELECT CAST(price AS REAL) FROM intraday_prices WHERE asset = 'XAG_USD' AND CAST(timestamp AS INTEGER) >= ? ORDER BY CAST(timestamp AS INTEGER) ASC LIMIT 1), high = (SELECT MAX(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND CAST(timestamp AS INTEGER) >= ?), low = (SELECT MIN(CAST(price AS REAL)) FROM intraday_prices WHERE asset = 'XAG_USD' AND CAST(timestamp AS INTEGER) >= ?) WHERE asset = 'XAG_USD' AND date = ?",
-                    [range.startMs, range.startMs, range.startMs, spotDate]
-                );
+            const now = Date.now();
+            if (liveCacheData && (now - lastLiveCacheTime) < 2000) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(liveCacheData);
+                return;
             }
+
             const dbRes = await queryD1(
                 "SELECT p1.* FROM prices p1 JOIN (SELECT asset, MAX(date) as max_date FROM prices GROUP BY asset) p2 ON p1.asset = p2.asset AND p1.date = p2.max_date"
             );
             const results = dbRes.result?.[0]?.results || [];
+            liveCacheData = JSON.stringify(results);
+            lastLiveCacheTime = now;
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(results));
+            res.end(liveCacheData);
         }
         else if (path === '/api/test-op') {
             const range21 = getTimestampRangeForDate("XAU_USD", "2026-08-21");
