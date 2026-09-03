@@ -1217,6 +1217,25 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(jsonStr);
         }
+        else if (path === '/api/d1-status') {
+            try {
+                const testRes = await queryD1("SELECT COUNT(*) as total_prices FROM prices");
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    status: "ACTIVE_AND_HEALTHY",
+                    limitExceeded: false,
+                    message: "Cloudflare D1 is completely healthy, within limits, and accepting queries.",
+                    inMemoryTicks: Object.keys(inMemoryTicks).reduce((acc, k) => { acc[k] = inMemoryTicks[k]?.length || 0; return acc; }, {})
+                }));
+            } catch (err) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    status: "LIMIT_EXCEEDED_OR_ERROR",
+                    limitExceeded: true,
+                    error: err.message
+                }));
+            }
+        }
         else if (path === '/api/clean-old-data') {
             logDebug("[MAINTENANCE] Cleaning all historical summaries before today...");
             const todayStr = getIstDateString();
