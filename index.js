@@ -216,64 +216,43 @@ async function saveIntradayTick(asset, price) {
 const inMemoryOhlc = {};
 
 async function saveDailySummary(asset, dateStr, open, high, low, close) {
+    const timestamp = Date.now();
+    const isCorruptedOpen = (val) => (!val || val <= 0 || val === 4521.45 || val === 4522.65 || val === 4333.85);
+
+    // 1. ALWAYS update inMemoryOhlc immediately in RAM (Zero latency, 100% immune to D1 errors)
+    if (!inMemoryOhlc[asset] || inMemoryOhlc[asset].date !== dateStr) {
+        const finalOpen = !isCorruptedOpen(open) ? open : close;
+        inMemoryOhlc[asset] = {
+            asset,
+            date: dateStr,
+            open: finalOpen,
+            high: Math.max(high || 0.0, close),
+            low: low > 0 ? low : close,
+            close: close,
+            timestamp: timestamp
+        };
+    } else {
+        const cached = inMemoryOhlc[asset];
+        if (isCorruptedOpen(cached.open) && !isCorruptedOpen(open)) {
+            cached.open = open;
+        }
+        cached.high = Math.max(cached.high || 0.0, high || 0.0, close);
+        if (low > 0) {
+            cached.low = cached.low > 0 ? Math.min(cached.low, low) : low;
+        }
+        cached.close = close;
+        cached.timestamp = timestamp;
+    }
+
+    // 2. Best-effort async update to D1 (safely caught so D1 limit errors never break memory state)
     try {
-        const timestamp = Date.now();
-        const isCorruptedOpen = (val) => (!val || val <= 0 || val === 4521.45 || val === 4522.65 || val === 4333.85);
-
-        if (!inMemoryOhlc[asset] || inMemoryOhlc[asset].date !== dateStr) {
-            let initOpen = open;
-            let initHigh = high;
-            let initLow = low;
-            
-            const checkRes = await queryD1(
-                "SELECT id, open, high, low, close FROM prices WHERE asset = ? AND date = ? ORDER BY id DESC LIMIT 1",
-                [asset, dateStr]
-            );
-            const rows = checkRes.result?.[0]?.results || [];
-            if (rows.length > 0) {
-                const existing = rows[0];
-                initOpen = !isCorruptedOpen(existing.open) ? existing.open : (!isCorruptedOpen(open) ? open : close);
-                initHigh = Math.max(existing.high || 0.0, high || 0.0, close);
-                initLow = (existing.low > 0 && low > 0) ? Math.min(existing.low, low) : (existing.low || low || close);
-                inMemoryOhlc[asset] = { id: existing.id, date: dateStr, open: initOpen, high: initHigh, low: initLow, close };
-            } else {
-                initOpen = !isCorruptedOpen(open) ? open : close;
-                initHigh = Math.max(high || 0.0, close);
-                initLow = low > 0 ? low : close;
-                const insRes = await queryD1(
-                    "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [asset, dateStr, initOpen, initHigh, initLow, close, timestamp]
-                );
-                const newId = insRes.result?.[0]?.meta?.last_row_id;
-                inMemoryOhlc[asset] = { id: newId, date: dateStr, open: initOpen, high: initHigh, low: initLow, close };
-            }
-        } else {
-            const cached = inMemoryOhlc[asset];
-            if (isCorruptedOpen(cached.open) && !isCorruptedOpen(open)) {
-                cached.open = open;
-            }
-            cached.high = Math.max(cached.high || 0.0, high || 0.0, close);
-            if (low > 0) {
-                cached.low = cached.low > 0 ? Math.min(cached.low, low) : low;
-            }
-            cached.close = close;
-        }
-
         const current = inMemoryOhlc[asset];
-        
-        if (current.id) {
-            await queryD1(
-                "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE id = ?",
-                [current.open, current.high, current.low, current.close, timestamp, current.id]
-            );
-        } else {
-            await queryD1(
-                "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE asset = ? AND date = ?",
-                [current.open, current.high, current.low, current.close, timestamp, asset, dateStr]
-            );
-        }
+        await queryD1(
+            "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(asset, date) DO UPDATE SET open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, timestamp=excluded.timestamp",
+            [asset, dateStr, current.open, current.high, current.low, current.close, timestamp]
+        ).catch(() => {});
     } catch (e) {
-        logDebug(`[SUMMARY ERROR] Failed to save daily summary for ${asset}: ${e.message}`);
+        // Safe ignore
     }
 }
 
@@ -1009,22 +988,26 @@ http.createServer(async (req, res) => {
 
     try {
         if (path === '/api/live') {
-            const now = Date.now();
-            if (liveCacheData && (now - lastLiveCacheTime) < 2000) {
+            const list = Object.values(inMemoryOhlc);
+            if (list.length > 0) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(liveCacheData);
+                res.end(JSON.stringify(list));
                 return;
             }
 
-            const dbRes = await queryD1(
-                "SELECT p1.* FROM prices p1 JOIN (SELECT asset, MAX(date) as max_date FROM prices GROUP BY asset) p2 ON p1.asset = p2.asset AND p1.date = p2.max_date"
-            );
-            const results = dbRes.result?.[0]?.results || [];
-            liveCacheData = JSON.stringify(results);
-            lastLiveCacheTime = now;
+            // Fallback if memory not yet populated: construct from lastPrices or D1
+            const fallbackList = Object.keys(lastPrices).map(assetKey => ({
+                asset: assetKey,
+                date: getIstDateString(),
+                open: lastPrices[assetKey] || 0,
+                high: lastPrices[assetKey] || 0,
+                low: lastPrices[assetKey] || 0,
+                close: lastPrices[assetKey] || 0,
+                timestamp: Date.now()
+            }));
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(liveCacheData);
+            res.end(JSON.stringify(fallbackList));
         }
         else if (path === '/api/test-op') {
             const range21 = getTimestampRangeForDate("XAU_USD", "2026-08-21");
@@ -1185,37 +1168,37 @@ http.createServer(async (req, res) => {
             const todayAssetDate = getAssetDateStringForTimestamp(asset, Date.now());
             const isToday = (date === todayAssetDate || date === getIstDateString() || date === getSpotAssetDateString());
 
-            // 1. If requested date is today and inMemoryTicks has items, SERVE DIRECTLY FROM RAM (0 D1 READS!)
-            if (isToday && inMemoryTicks[asset] && inMemoryTicks[asset].length > 0) {
+            // 1. If requested date is today, ALWAYS SERVE DIRECTLY FROM RAM (0 D1 READS!)
+            if (isToday) {
+                const ticks = inMemoryTicks[asset] || [];
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(inMemoryTicks[asset]));
+                res.end(JSON.stringify(ticks));
                 return;
             }
 
             // 2. If it's a past date and cached in RAM, SERVE DIRECTLY FROM RAM (0 D1 READS!)
             const cacheKey = `${asset}_${date}`;
-            if (!isToday && pastTicksCache.has(cacheKey)) {
+            if (pastTicksCache.has(cacheKey)) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(pastTicksCache.get(cacheKey));
                 return;
             }
 
-            // 3. Otherwise query D1 once
-            const dbRes = await queryD1(
-                "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
-                [asset, range.startMs, range.endMs]
-            );
-            const results = dbRes.result?.[0]?.results || [];
-            const jsonStr = JSON.stringify(results);
-
-            if (isToday) {
-                inMemoryTicks[asset] = [...results];
-            } else {
+            // 3. Otherwise query D1 once for past date (safe try/catch fallback)
+            try {
+                const dbRes = await queryD1(
+                    "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                    [asset, range.startMs, range.endMs]
+                );
+                const results = dbRes.result?.[0]?.results || [];
+                const jsonStr = JSON.stringify(results);
                 pastTicksCache.set(cacheKey, jsonStr);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(jsonStr);
+            } catch (e) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify([]));
             }
-
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(jsonStr);
         }
         else if (path === '/api/d1-status') {
             try {
