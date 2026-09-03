@@ -183,6 +183,8 @@ function getTimestampRangeForDate(asset, dateStr) {
     return { startMs, endMs };
 }
 
+const inMemoryTicks = {};
+
 async function saveIntradayTick(asset, price) {
     const currentPrice = toDoubleSafe(price);
     if (currentPrice <= 0.0) return;
@@ -190,6 +192,15 @@ async function saveIntradayTick(asset, price) {
     // Record ticks unconditionally every 10 seconds as requested (even if rate is unchanged)
     lastPrices[asset] = currentPrice;
     const timestamp = Date.now();
+
+    if (!inMemoryTicks[asset]) {
+        inMemoryTicks[asset] = [];
+    }
+    // Newest first (consistent with ORDER BY timestamp DESC)
+    inMemoryTicks[asset].unshift({ timestamp, price: currentPrice });
+    if (inMemoryTicks[asset].length > 10000) {
+        inMemoryTicks[asset].pop();
+    }
 
     try {
         await queryD1(
@@ -973,6 +984,9 @@ setInterval(async () => {
 // In-memory response cache for /api/live endpoint
 let liveCacheData = null;
 let lastLiveCacheTime = 0;
+const pastTicksCache = new Map();
+const loggedDatesCache = new Map();
+const historicalCache = new Map();
 
 // Start HTTP server for Render health checks and secure API proxy endpoints
 const PORT = process.env.PORT || 10000;
@@ -1090,6 +1104,14 @@ http.createServer(async (req, res) => {
         }
         else if (path === '/api/historical') {
             const asset = query.asset;
+            const now = Date.now();
+            const cached = historicalCache.get(asset);
+            if (cached && (now - cached.time) < 60000) { // 60s cache
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(cached.json);
+                return;
+            }
+
             const dbRes = await queryD1(
                 "SELECT date, open, high, low, close, timestamp FROM prices WHERE asset = ? ORDER BY date DESC, timestamp DESC",
                 [asset]
@@ -1113,11 +1135,21 @@ http.createServer(async (req, res) => {
                     return r;
                 });
             }
+            const jsonStr = JSON.stringify(results);
+            historicalCache.set(asset, { time: now, json: jsonStr });
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(results));
+            res.end(jsonStr);
         }
         else if (path === '/api/logged-dates') {
             const asset = query.asset;
+            const now = Date.now();
+            const cached = loggedDatesCache.get(asset);
+            if (cached && (now - cached.time) < 600000) { // 10 minutes cache
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(cached.json);
+                return;
+            }
+
             const dbRes = await queryD1(
                 "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts FROM intraday_prices WHERE asset = ?",
                 [asset]
@@ -1135,8 +1167,10 @@ http.createServer(async (req, res) => {
                 datesList.push(...Array.from(seen).sort().reverse());
             }
             
+            const jsonStr = JSON.stringify(datesList);
+            loggedDatesCache.set(asset, { time: now, json: jsonStr });
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(datesList));
+            res.end(jsonStr);
         }
         else if (path === '/api/ticks') {
             const asset = query.asset;
@@ -1147,13 +1181,41 @@ http.createServer(async (req, res) => {
                 res.end(JSON.stringify({ error: "Invalid date format" }));
                 return;
             }
+
+            const todayAssetDate = getAssetDateStringForTimestamp(asset, Date.now());
+            const isToday = (date === todayAssetDate || date === getIstDateString() || date === getSpotAssetDateString());
+
+            // 1. If requested date is today and inMemoryTicks has items, SERVE DIRECTLY FROM RAM (0 D1 READS!)
+            if (isToday && inMemoryTicks[asset] && inMemoryTicks[asset].length > 0) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(inMemoryTicks[asset]));
+                return;
+            }
+
+            // 2. If it's a past date and cached in RAM, SERVE DIRECTLY FROM RAM (0 D1 READS!)
+            const cacheKey = `${asset}_${date}`;
+            if (!isToday && pastTicksCache.has(cacheKey)) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(pastTicksCache.get(cacheKey));
+                return;
+            }
+
+            // 3. Otherwise query D1 once
             const dbRes = await queryD1(
                 "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
                 [asset, range.startMs, range.endMs]
             );
             const results = dbRes.result?.[0]?.results || [];
+            const jsonStr = JSON.stringify(results);
+
+            if (isToday) {
+                inMemoryTicks[asset] = [...results];
+            } else {
+                pastTicksCache.set(cacheKey, jsonStr);
+            }
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(results));
+            res.end(jsonStr);
         }
         else if (path === '/api/clean-old-data') {
             logDebug("[MAINTENANCE] Cleaning all historical summaries before today...");
