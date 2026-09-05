@@ -775,21 +775,27 @@ async function sendGoldGstRateMessage(customGroupId = null) {
 
     const selectedScripts = config.selectedScripts || ['GOLD_999_GST'];
     
-    // Fetch latest prices for selected scripts
+    // Fetch latest prices for selected scripts (RAM FIRST - 0 D1 reads, instantaneous live rate!)
     const pricesMap = {};
     for (const script of selectedScripts) {
-        let price = lastPrices[script] || 0.0;
-        try {
-            const dbRes = await queryD1(
-                "SELECT close FROM prices WHERE asset = ? ORDER BY date DESC LIMIT 1",
-                [script]
-            );
-            const rows = dbRes?.result?.[0]?.results || [];
-            if (rows.length > 0 && rows[0].close > 0) {
-                price = rows[0].close;
+        let price = (inMemoryOhlc[script] && inMemoryOhlc[script].close > 0)
+            ? inMemoryOhlc[script].close
+            : (lastPrices[script] || 0.0);
+
+        // Fallback to D1 only if server just booted and RAM is empty
+        if (price <= 0.0) {
+            try {
+                const dbRes = await queryD1(
+                    "SELECT close FROM prices WHERE asset = ? ORDER BY date DESC LIMIT 1",
+                    [script]
+                );
+                const rows = dbRes?.result?.[0]?.results || [];
+                if (rows.length > 0 && rows[0].close > 0) {
+                    price = rows[0].close;
+                }
+            } catch (e) {
+                logDebug(`[WA RATE FETCH WARNING ${script}] ${e.message}`);
             }
-        } catch (e) {
-            logDebug(`[WA RATE FETCH WARNING ${script}] ${e.message}`);
         }
         pricesMap[script] = price;
     }
