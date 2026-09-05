@@ -1584,6 +1584,13 @@ async function recalculateAllOHLCFromTicks() {
 
 async function ensureHistoricalBaselines() {
     try {
+        const countRes = await queryD1("SELECT COUNT(*) as cnt FROM prices");
+        const count = countRes?.result?.[0]?.results?.[0]?.cnt || 0;
+        if (count >= 50) {
+            logDebug(`[BASELINES] Prices table already has ${count} historical rows. Skipping repetitive baseline inserts.`);
+            return;
+        }
+
         const timestamp = Date.now();
         const upsertPriceRow = async (asset, dateStr, open, high, low, close) => {
             const checkRes = await queryD1("SELECT id FROM prices WHERE asset = ? AND date = ?", [asset, dateStr]);
