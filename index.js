@@ -214,6 +214,7 @@ async function saveIntradayTick(asset, price) {
 }
 
 const inMemoryOhlc = {};
+const lastD1OhlcSync = {};
 
 async function saveDailySummary(asset, dateStr, open, high, low, close) {
     const timestamp = Date.now();
@@ -244,15 +245,26 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         cached.timestamp = timestamp;
     }
 
-    // 2. Best-effort async update to D1 (safely caught so D1 limit errors never break memory state)
-    try {
-        const current = inMemoryOhlc[asset];
-        await queryD1(
-            "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(asset, date) DO UPDATE SET open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, timestamp=excluded.timestamp",
-            [asset, dateStr, current.open, current.high, current.low, current.close, timestamp]
-        ).catch(() => {});
-    } catch (e) {
-        // Safe ignore
+    // 2. Throttled async update to D1 (once every 30s per asset) using clean UPDATE / INSERT
+    const now = Date.now();
+    const lastSync = lastD1OhlcSync[asset] || 0;
+    if (now - lastSync >= 30000) {
+        lastD1OhlcSync[asset] = now;
+        try {
+            const current = inMemoryOhlc[asset];
+            const updRes = await queryD1(
+                "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE asset = ? AND date = ?",
+                [current.open, current.high, current.low, current.close, timestamp, asset, dateStr]
+            );
+            if (updRes?.result?.[0]?.meta?.changes === 0) {
+                await queryD1(
+                    "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [asset, dateStr, current.open, current.high, current.low, current.close, timestamp]
+                );
+            }
+        } catch (e) {
+            // Safe ignore
+        }
     }
 }
 
@@ -1089,7 +1101,7 @@ http.createServer(async (req, res) => {
             const asset = query.asset;
             const now = Date.now();
             const cached = historicalCache.get(asset);
-            if (cached && (now - cached.time) < 60000) { // 60s cache
+            if (cached && (now - cached.time) < 600000) { // 10 minutes cache
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(cached.json);
                 return;
@@ -1127,33 +1139,35 @@ http.createServer(async (req, res) => {
             const asset = query.asset;
             const now = Date.now();
             const cached = loggedDatesCache.get(asset);
-            if (cached && (now - cached.time) < 600000) { // 10 minutes cache
+            if (cached && (now - cached.time) < 3600000) { // 1 hour cache
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(cached.json);
                 return;
             }
 
-            const dbRes = await queryD1(
-                "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts FROM intraday_prices WHERE asset = ?",
-                [asset]
-            );
-            const results = dbRes.result?.[0]?.results || [];
-            const row = results[0];
-            const datesList = [];
-            
-            if (row && row.min_ts !== null && row.max_ts !== null) {
-                const seen = new Set();
-                for (let ts = row.min_ts; ts <= row.max_ts; ts += 3600 * 1000) {
-                    seen.add(getAssetDateStringForTimestamp(asset, ts));
+            try {
+                // Query prices table directly (reads ONLY ~50 rows instead of scanning 500,000+ ticks in intraday_prices!)
+                const dbRes = await queryD1(
+                    "SELECT DISTINCT date FROM prices WHERE asset = ? ORDER BY date DESC",
+                    [asset]
+                );
+                const results = dbRes.result?.[0]?.results || [];
+                const datesList = results.map(r => r.date).filter(Boolean);
+
+                const todayStr = getIstDateString();
+                if (!datesList.includes(todayStr)) {
+                    datesList.unshift(todayStr);
                 }
-                seen.add(getAssetDateStringForTimestamp(asset, row.max_ts));
-                datesList.push(...Array.from(seen).sort().reverse());
+
+                const jsonStr = JSON.stringify(datesList);
+                loggedDatesCache.set(asset, { time: now, json: jsonStr });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(jsonStr);
+            } catch (err) {
+                const fallback = [getIstDateString()];
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(fallback));
             }
-            
-            const jsonStr = JSON.stringify(datesList);
-            loggedDatesCache.set(asset, { time: now, json: jsonStr });
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(jsonStr);
         }
         else if (path === '/api/ticks') {
             const asset = query.asset;
