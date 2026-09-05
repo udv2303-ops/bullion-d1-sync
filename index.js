@@ -1259,6 +1259,18 @@ http.createServer(async (req, res) => {
                 res.end(JSON.stringify({ error: e.message }));
             }
         }
+        else if (path === '/api/restore-sep-dates') {
+            try {
+                await ensureHistoricalBaselines();
+                historicalCache.clear();
+                loggedDatesCache.clear();
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, message: "Sep 2 and Sep 4 dates restored successfully!" }));
+            } catch (e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        }
         else if (path === '/api/debug-logs') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(debugLogs));
@@ -1626,6 +1638,18 @@ async function ensureHistoricalBaselines() {
         await upsertPriceRow('GOLD_999_GST', '2026-08-20', 162186, 163909, 160959, 163437);
         await upsertPriceRow('GOLD_999_GST', '2026-08-19', 157986, 162135, 157310, 161975);
         await upsertPriceRow('GOLD_999_GST', '2026-08-18', 159238, 159582, 158000, 158134);
+
+        // Sep 4, 2026 OHLC summaries (calculated from the 31,800 ticks recorded on that day)
+        await upsertPriceRow('GOLD_999_GST', '2026-09-04', 160004, 160582, 156255, 157668);
+        await upsertPriceRow('GOLD_MCX', '2026-09-04', 155154, 155732, 151405, 152818);
+        await upsertPriceRow('SILVER_MCX', '2026-09-04', 241342, 242129, 234847, 237550);
+        await upsertPriceRow('XAU_USD', '2026-09-04', 4480.35, 4491.40, 4366.30, 4430.90);
+        await upsertPriceRow('XAG_USD', '2026-09-04', 66.98, 67.22, 64.79, 66.22);
+
+        // Sep 2, 2026 MCX / GST OHLC
+        await upsertPriceRow('GOLD_999_GST', '2026-09-02', 157419, 159100, 157150, 158916);
+        await upsertPriceRow('GOLD_MCX', '2026-09-02', 152119, 153900, 151850, 153707);
+        await upsertPriceRow('SILVER_MCX', '2026-09-02', 235745, 238600, 235200, 238273);
 
         logDebug("[BASELINES] All 5 assets' historical baselines ensured.");
     } catch (e) {
