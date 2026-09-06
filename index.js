@@ -259,8 +259,29 @@ function getTimestampRangeForDate(asset, dateStr) {
 }
 
 const inMemoryTicks = {};
-const lastD1TickPrices = {};
-const lastD1TickTimes = {};
+const currentMinuteTicks = {};
+const currentMinuteKey = {};
+
+async function flushMinuteToD1(asset, minuteTs, ticks) {
+    if (!ticks || ticks.length === 0) return;
+    try {
+        const jsonStr = JSON.stringify(ticks);
+        // Upsert 1 single row per minute containing all 6 distinct 10-second ticks
+        const upd = await queryD1(
+            "UPDATE intraday_minute_ticks SET ticks_json = ? WHERE asset = ? AND minute_timestamp = ?",
+            [jsonStr, asset, minuteTs]
+        );
+        if (upd?.result?.[0]?.meta?.changes === 0) {
+            await queryD1(
+                "INSERT INTO intraday_minute_ticks (asset, minute_timestamp, ticks_json) VALUES (?, ?, ?)",
+                [asset, minuteTs, jsonStr]
+            );
+        }
+        logDebug(`[MINUTE D1] Flushed ${asset} at ${new Date(minuteTs).toLocaleTimeString()} with ${ticks.length} ticks`);
+    } catch (e) {
+        logDebug(`[MINUTE D1 ERROR] Failed to flush minute for ${asset}: ${e.message}`);
+    }
+}
 
 async function saveIntradayTick(asset, price) {
     const currentPrice = toDoubleSafe(price);
@@ -280,34 +301,35 @@ async function saveIntradayTick(asset, price) {
     }
 
     // 2. Market Open Check for Cloudflare D1:
-    // When market is closed (Weekends, nights for MCX), ZERO writes to D1!
+    // When market is closed (Weekends, nights for MCX/GST), ZERO writes to D1!
     if (!isAssetMarketOpenNow(asset)) {
         return;
     }
 
-    // 3. Throttle D1 writes:
-    // If price changed: write to D1 immediately.
-    // If price is identical: write to D1 at most once every 60 seconds.
-    const lastPrice = lastD1TickPrices[asset];
-    const lastTime = lastD1TickTimes[asset] || 0;
-    const priceChanged = (lastPrice === undefined || Math.abs(currentPrice - lastPrice) > 0.0001);
+    // 3. 1-Minute Tick Bucketing for Cloudflare D1:
+    // Align timestamp to the start of the current minute (e.g. 12:05:00.000)
+    const minuteTs = Math.floor(timestamp / 60000) * 60000;
 
-    if (!priceChanged && (timestamp - lastTime < 60000)) {
-        return; // Unchanged price within 60s -> skip D1 write
+    if (!currentMinuteTicks[asset]) {
+        currentMinuteTicks[asset] = [];
+        currentMinuteKey[asset] = minuteTs;
     }
 
-    lastD1TickPrices[asset] = currentPrice;
-    lastD1TickTimes[asset] = timestamp;
+    // If minute has rolled over, flush completed minute to D1 as 1 single row
+    if (currentMinuteKey[asset] !== minuteTs) {
+        const completedTs = currentMinuteKey[asset];
+        const completedTicks = currentMinuteTicks[asset];
 
-    try {
-        await queryD1(
-            "INSERT INTO intraday_prices (asset, price, timestamp) VALUES (?, ?, ?)",
-            [asset, currentPrice, timestamp]
-        );
-        logDebug(`[TICK D1] Inserted ${asset}: ${currentPrice}`);
-    } catch (e) {
-        logDebug(`[TICK ERROR] Failed to save tick for ${asset}: ${e.message}`);
+        currentMinuteTicks[asset] = [];
+        currentMinuteKey[asset] = minuteTs;
+
+        if (completedTicks.length > 0) {
+            flushMinuteToD1(asset, completedTs, completedTicks);
+        }
     }
+
+    // Every 10-second tick is recorded as its own distinct item with its exact timestamp, even if price is same!
+    currentMinuteTicks[asset].push({ timestamp, price: currentPrice });
 }
 
 const inMemoryOhlc = {};
@@ -1306,13 +1328,36 @@ http.createServer(async (req, res) => {
                 return;
             }
 
-            // 3. Otherwise query D1 once for past date (safe try/catch fallback)
+            // 3. Otherwise query D1 once for past date (query minute buckets and unpack into 10s ticks)
             try {
-                const dbRes = await queryD1(
-                    "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                let results = [];
+                // Check 1-minute bucket table first
+                const bucketRes = await queryD1(
+                    "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp DESC",
                     [asset, range.startMs, range.endMs]
                 );
-                const results = dbRes.result?.[0]?.results || [];
+                const bucketRows = bucketRes.result?.[0]?.results || [];
+                if (bucketRows.length > 0) {
+                    for (const row of bucketRows) {
+                        try {
+                            const parsed = JSON.parse(row.ticks_json);
+                            if (Array.isArray(parsed)) {
+                                // Newest first
+                                for (let i = parsed.length - 1; i >= 0; i--) {
+                                    results.push(parsed[i]);
+                                }
+                            }
+                        } catch (err) {}
+                    }
+                } else {
+                    // Fallback to legacy intraday_prices table for historical dates before bucketing
+                    const dbRes = await queryD1(
+                        "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                        [asset, range.startMs, range.endMs]
+                    );
+                    results = dbRes.result?.[0]?.results || [];
+                }
+
                 const jsonStr = JSON.stringify(results);
                 pastTicksCache.set(cacheKey, jsonStr);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1808,7 +1853,9 @@ async function deduplicateD1PricesTable() {
 // Create database indexes on launch to optimize queries
 async function initDatabaseIndexes() {
     try {
-        logDebug("Initializing D1 Database indexes...");
+        logDebug("Initializing D1 Database indexes and tables...");
+        await queryD1("CREATE TABLE IF NOT EXISTS intraday_minute_ticks (id INTEGER PRIMARY KEY AUTOINCREMENT, asset TEXT, minute_timestamp INTEGER, ticks_json TEXT)");
+        await queryD1("CREATE INDEX IF NOT EXISTS idx_minute_ticks_asset_ts ON intraday_minute_ticks(asset, minute_timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         await ensureHistoricalBaselines();
