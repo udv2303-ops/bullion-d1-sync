@@ -300,13 +300,7 @@ async function saveIntradayTick(asset, price) {
         inMemoryTicks[asset].pop();
     }
 
-    // 2. Market Open Check for Cloudflare D1:
-    // When market is closed (Weekends, nights for MCX/GST), ZERO writes to D1!
-    if (!isAssetMarketOpenNow(asset)) {
-        return;
-    }
-
-    // 3. 1-Minute Tick Bucketing for Cloudflare D1:
+    // 2. 1-Minute Tick Bucketing for Cloudflare D1 (Active 24/7 including Saturday & Sunday):
     // Align timestamp to the start of the current minute (e.g. 12:05:00.000)
     const minuteTs = Math.floor(timestamp / 60000) * 60000;
 
@@ -364,12 +358,7 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         cached.timestamp = timestamp;
     }
 
-    // 2. Market Open Check: If market is closed, do NOT write to D1!
-    if (!isAssetMarketOpenNow(asset)) {
-        return;
-    }
-
-    // 3. Throttled async update to D1 (once every 5 minutes / 300s per asset) using clean UPDATE / INSERT
+    // 2. Throttled async update to D1 (once every 5 minutes / 300s per asset, active 24/7) using clean UPDATE / INSERT
     const now = Date.now();
     const lastSync = lastD1OhlcSync[asset] || 0;
     if (now - lastSync >= 300000) {
