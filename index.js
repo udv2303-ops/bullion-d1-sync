@@ -1317,34 +1317,63 @@ http.createServer(async (req, res) => {
                 return;
             }
 
-            // 3. Otherwise query D1 once for past date (query minute buckets and unpack into 10s ticks)
+            // 3. Otherwise query D1 once for past date:
             try {
                 let results = [];
-                // Check 1-minute bucket table first
-                const bucketRes = await queryD1(
-                    "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp DESC",
-                    [asset, range.startMs, range.endMs]
+
+                // 3a. Check daily_tick_archives first (READS ONLY 1 SINGLE ROW FROM D1!)
+                const archiveRes = await queryD1(
+                    "SELECT ticks_json FROM daily_tick_archives WHERE asset = ? AND date = ? LIMIT 1",
+                    [asset, date]
                 );
-                const bucketRows = bucketRes.result?.[0]?.results || [];
-                if (bucketRows.length > 0) {
-                    for (const row of bucketRows) {
-                        try {
-                            const parsed = JSON.parse(row.ticks_json);
-                            if (Array.isArray(parsed)) {
-                                // Newest first
-                                for (let i = parsed.length - 1; i >= 0; i--) {
-                                    results.push(parsed[i]);
-                                }
-                            }
-                        } catch (err) {}
-                    }
-                } else {
-                    // Fallback to legacy intraday_prices table for historical dates before bucketing
-                    const dbRes = await queryD1(
-                        "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                const archiveRow = archiveRes.result?.[0]?.results?.[0];
+                if (archiveRow && archiveRow.ticks_json) {
+                    try {
+                        results = JSON.parse(archiveRow.ticks_json);
+                        logDebug(`[ARCHIVE READ] Served ${asset} for ${date} directly from daily_tick_archives (1 single row read!)`);
+                    } catch (e) {}
+                }
+
+                // 3b. If not yet archived, query 1-minute buckets
+                if (results.length === 0) {
+                    const bucketRes = await queryD1(
+                        "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp DESC",
                         [asset, range.startMs, range.endMs]
                     );
-                    results = dbRes.result?.[0]?.results || [];
+                    const bucketRows = bucketRes.result?.[0]?.results || [];
+                    if (bucketRows.length > 0) {
+                        for (const row of bucketRows) {
+                            try {
+                                const parsed = JSON.parse(row.ticks_json);
+                                if (Array.isArray(parsed)) {
+                                    for (let i = parsed.length - 1; i >= 0; i--) {
+                                        results.push(parsed[i]);
+                                    }
+                                }
+                            } catch (err) {}
+                        }
+                    } else {
+                        // Fallback to legacy intraday_prices table
+                        const dbRes = await queryD1(
+                            "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                            [asset, range.startMs, range.endMs]
+                        );
+                        results = dbRes.result?.[0]?.results || [];
+                    }
+
+                    // 3c. AUTO-ARCHIVE: Once assembled, save whole day as 1 single row for future lightning-fast 1-row reads!
+                    if (results.length > 0) {
+                        try {
+                            const jsonToArchive = JSON.stringify(results);
+                            await queryD1(
+                                "INSERT OR REPLACE INTO daily_tick_archives (asset, date, ticks_json) VALUES (?, ?, ?)",
+                                [asset, date, jsonToArchive]
+                            );
+                            logDebug(`[AUTO-ARCHIVE] Archived ${results.length} ticks for ${asset} on ${date} into 1 single row`);
+                        } catch (e) {
+                            // Safe ignore
+                        }
+                    }
                 }
 
                 const jsonStr = JSON.stringify(results);
@@ -1843,6 +1872,8 @@ async function deduplicateD1PricesTable() {
 async function initDatabaseIndexes() {
     try {
         logDebug("Initializing D1 Database indexes and tables...");
+        await queryD1("CREATE TABLE IF NOT EXISTS daily_tick_archives (id INTEGER PRIMARY KEY AUTOINCREMENT, asset TEXT, date TEXT, ticks_json TEXT)");
+        await queryD1("CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_tick_archives_asset_date ON daily_tick_archives(asset, date)");
         await queryD1("CREATE TABLE IF NOT EXISTS intraday_minute_ticks (id INTEGER PRIMARY KEY AUTOINCREMENT, asset TEXT, minute_timestamp INTEGER, ticks_json TEXT)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_minute_ticks_asset_ts ON intraday_minute_ticks(asset, minute_timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
