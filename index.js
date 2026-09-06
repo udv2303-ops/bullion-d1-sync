@@ -194,12 +194,36 @@ function isSpotMarketOpenNow() {
     return true;
 }
 
+// Check if Indian GST Bullion (physical spot) market is actively open right now
+function isGstMarketOpenNow() {
+    const d = new Date();
+    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+    const istDay = istTime.getUTCDay(); // 0 = Sunday, 6 = Saturday
+    if (istDay === 0) return false; // Sunday completely closed
+
+    const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
+    
+    // Saturday: Physical bullion market is open (09:00 AM to 08:30 PM IST)
+    if (istDay === 6) {
+        const startSecondsSat = 9 * 3600; // 09:00:00 AM IST
+        const endSecondsSat = 20 * 3600 + 30 * 60; // 08:30:00 PM IST
+        return secondsSinceMidnight >= startSecondsSat && secondsSinceMidnight <= endSecondsSat;
+    }
+
+    // Monday to Friday: 09:00:10 AM to 11:50:00 PM IST
+    const startSeconds = 9 * 3600 + 10;
+    const endSeconds = 23 * 3600 + 50 * 60;
+    return secondsSinceMidnight >= startSeconds && secondsSinceMidnight <= endSeconds;
+}
+
 // Check if an asset's market is actively open right now
 function isAssetMarketOpenNow(asset) {
     if (asset === "XAU_USD" || asset === "XAG_USD") {
         return isSpotMarketOpenNow();
-    } else if (asset === "GOLD_MCX" || asset === "SILVER_MCX" || asset === "GOLD_999_GST") {
+    } else if (asset === "GOLD_MCX" || asset === "SILVER_MCX") {
         return isMcxMarketOpenNow();
+    } else if (asset === "GOLD_999_GST") {
+        return isGstMarketOpenNow();
     }
     return true;
 }
@@ -534,8 +558,9 @@ async function syncHarikalaBroadcast() {
         const lines = raw.split("\n");
         const dateStr = getIstDateString();
         
-        const isMcxGstMarketOpen = isMcxMarketOpenNow();
+        const isMcxMarketOpen = isMcxMarketOpenNow();
         const isSpotOpen = isSpotMarketOpenNow();
+        const isGstOpen = isGstMarketOpenNow();
         
         for (let line of lines) {
             line = line.trim();
@@ -575,7 +600,7 @@ async function syncHarikalaBroadcast() {
                 // MCX Gold Future
                 await saveDailySummary("GOLD_MCX", dateStr, openVal, highVal, lowVal, closeVal);
                 await saveIntradayTick("GOLD_MCX", closeVal);
-                if (isMcxGstMarketOpen) {
+                if (isMcxMarketOpen) {
                     logDebug(`[HARIKALA-MCX] Synced GOLD_MCX: ${closeVal}`);
                 }
             }
@@ -583,7 +608,7 @@ async function syncHarikalaBroadcast() {
                 // MCX Silver Future
                 await saveDailySummary("SILVER_MCX", dateStr, openVal, highVal, lowVal, closeVal);
                 await saveIntradayTick("SILVER_MCX", closeVal);
-                if (isMcxGstMarketOpen) {
+                if (isMcxMarketOpen) {
                     logDebug(`[HARIKALA-MCX] Synced SILVER_MCX: ${closeVal}`);
                 }
             }
@@ -591,8 +616,8 @@ async function syncHarikalaBroadcast() {
                 // GST Gold
                 await saveDailySummary("GOLD_999_GST", dateStr, openVal, highVal, lowVal, closeVal);
                 await saveIntradayTick("GOLD_999_GST", closeVal);
-                if (isMcxGstMarketOpen) {
-                    logDebug(`[HARIKALA-SPOT] Synced GOLD_999_GST: ${closeVal}`);
+                if (isGstOpen) {
+                    logDebug(`[HARIKALA-GST] Synced GOLD_999_GST: ${closeVal}`);
                 }
             }
         }
