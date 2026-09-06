@@ -637,9 +637,95 @@ async function syncHarikalaBroadcast() {
     }
 }
 
+let lastProcessedIstDate = getIstDateString();
+
+async function autoArchiveDay(completedDate) {
+    logDebug(`[AUTO-ARCHIVE MIDNIGHT] Consolidating day ${completedDate} into 1 row per asset...`);
+    const assets = ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
+    for (const asset of assets) {
+        try {
+            // Check if already archived
+            const checkRes = await queryD1(
+                "SELECT id FROM daily_tick_archives WHERE asset = ? AND date = ? LIMIT 1",
+                [asset, completedDate]
+            );
+            if (checkRes?.result?.[0]?.results?.length > 0) {
+                continue; // Already archived
+            }
+
+            const range = getTimestampRangeForDate(asset, completedDate);
+            if (!range) continue;
+
+            // 1. Gather ticks from intraday_minute_ticks
+            let dayTicks = [];
+            const bucketRes = await queryD1(
+                "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp ASC",
+                [asset, range.startMs, range.endMs]
+            );
+            const bucketRows = bucketRes.result?.[0]?.results || [];
+            for (const row of bucketRows) {
+                try {
+                    const parsed = JSON.parse(row.ticks_json);
+                    if (Array.isArray(parsed)) {
+                        dayTicks.push(...parsed);
+                    }
+                } catch (e) {}
+            }
+
+            // 2. Fallback to inMemoryTicks if minute bucket was empty
+            if (dayTicks.length === 0 && inMemoryTicks[asset]) {
+                dayTicks = inMemoryTicks[asset]
+                    .filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs)
+                    .sort((a, b) => a.timestamp - b.timestamp);
+            }
+
+            // 3. Fallback to legacy intraday_prices table
+            if (dayTicks.length === 0) {
+                const legacyRes = await queryD1(
+                    "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+                    [asset, range.startMs, range.endMs]
+                );
+                dayTicks = legacyRes.result?.[0]?.results || [];
+            }
+
+            if (dayTicks.length > 0) {
+                const jsonStr = JSON.stringify(dayTicks);
+                await queryD1(
+                    "INSERT OR REPLACE INTO daily_tick_archives (asset, date, ticks_json) VALUES (?, ?, ?)",
+                    [asset, completedDate, jsonStr]
+                );
+                logDebug(`[AUTO-ARCHIVE MIDNIGHT] Successfully consolidated ${dayTicks.length} ticks for ${asset} on ${completedDate} into 1 single row!`);
+
+                // Clean up intermediate minute ticks for completed past day to save database storage
+                await queryD1(
+                    "DELETE FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ?",
+                    [asset, range.startMs, range.endMs]
+                );
+            }
+        } catch (err) {
+            logDebug(`[AUTO-ARCHIVE MIDNIGHT ERROR] ${asset} on ${completedDate}: ${err.message}`);
+        }
+    }
+}
+
 // Main sync scheduling loop
 async function runSyncCycle() {
     logDebug(`[SYNC CYCLE START]`);
+
+    // Midnight Rollover Check: When date changes, auto-archive previous completed day into 1 single row
+    const currentIstDate = getIstDateString();
+    if (currentIstDate !== lastProcessedIstDate) {
+        const completedDate = lastProcessedIstDate;
+        lastProcessedIstDate = currentIstDate;
+        // Flush remaining buffers before archiving
+        for (const asset of Object.keys(currentMinuteTicks)) {
+            if (currentMinuteTicks[asset] && currentMinuteTicks[asset].length > 0) {
+                await flushMinuteToD1(asset, currentMinuteKey[asset], currentMinuteTicks[asset]);
+                currentMinuteTicks[asset] = [];
+            }
+        }
+        await autoArchiveDay(completedDate);
+    }
 
     // Run all live sync queries
     try {
