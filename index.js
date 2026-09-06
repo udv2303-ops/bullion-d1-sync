@@ -153,6 +153,57 @@ function getSpotAssetDateString() {
     return getAssetDateStringForTimestamp("XAU_USD", Date.now());
 }
 
+// Check if MCX and Indian GST Bullion market is actively open right now
+function isMcxMarketOpenNow() {
+    const d = new Date();
+    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+    const istDay = istTime.getUTCDay(); // 0 = Sunday, 6 = Saturday
+    if (istDay === 0 || istDay === 6) return false; // Saturday & Sunday completely closed
+
+    const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
+    const startSeconds = 9 * 3600 + 10; // 09:00:10 AM IST
+    const endSeconds = 23 * 3600 + 50 * 60; // 11:50:00 PM IST
+    return secondsSinceMidnight >= startSeconds && secondsSinceMidnight <= endSeconds;
+}
+
+// Check if International Spot Gold / Silver market is actively open right now
+function isSpotMarketOpenNow() {
+    const d = new Date();
+    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+    const istDay = istTime.getUTCDay(); // 0 = Sunday, 6 = Saturday
+    const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
+
+    // Sunday: Closed all day
+    if (istDay === 0) return false;
+
+    // Saturday: Closes at 02:30:00 AM IST (Summer DST) or 03:30:00 AM IST (Winter)
+    if (istDay === 6) {
+        const dst = isUsDst(istTime);
+        const closeSeconds = dst ? (2 * 3600 + 30 * 60) : (3 * 3600 + 30 * 60);
+        return secondsSinceMidnight <= closeSeconds;
+    }
+
+    // Monday: Opens at 03:31:00 AM IST (Summer DST) or 04:31:00 AM IST (Winter)
+    if (istDay === 1) {
+        const dst = isUsDst(istTime);
+        const openSeconds = dst ? (3 * 3600 + 31 * 60) : (4 * 3600 + 31 * 60);
+        return secondsSinceMidnight >= openSeconds;
+    }
+
+    // Tuesday to Friday: Open 24 hours
+    return true;
+}
+
+// Check if an asset's market is actively open right now
+function isAssetMarketOpenNow(asset) {
+    if (asset === "XAU_USD" || asset === "XAG_USD") {
+        return isSpotMarketOpenNow();
+    } else if (asset === "GOLD_MCX" || asset === "SILVER_MCX" || asset === "GOLD_999_GST") {
+        return isMcxMarketOpenNow();
+    }
+    return true;
+}
+
 // Calculate start and end millisecond timestamps for a given YYYY-MM-DD date and asset (DST aware)
 function getTimestampRangeForDate(asset, dateStr) {
     const parts = dateStr.split('-');
@@ -184,12 +235,14 @@ function getTimestampRangeForDate(asset, dateStr) {
 }
 
 const inMemoryTicks = {};
+const lastD1TickPrices = {};
+const lastD1TickTimes = {};
 
 async function saveIntradayTick(asset, price) {
     const currentPrice = toDoubleSafe(price);
     if (currentPrice <= 0.0) return;
 
-    // Record ticks unconditionally every 10 seconds as requested (even if rate is unchanged)
+    // 1. Record ticks unconditionally in RAM every 10 seconds (Zero latency, live streaming for app & WhatsApp)
     lastPrices[asset] = currentPrice;
     const timestamp = Date.now();
 
@@ -202,12 +255,32 @@ async function saveIntradayTick(asset, price) {
         inMemoryTicks[asset].pop();
     }
 
+    // 2. Market Open Check for Cloudflare D1:
+    // When market is closed (Weekends, nights for MCX), ZERO writes to D1!
+    if (!isAssetMarketOpenNow(asset)) {
+        return;
+    }
+
+    // 3. Throttle D1 writes:
+    // If price changed: write to D1 immediately.
+    // If price is identical: write to D1 at most once every 60 seconds.
+    const lastPrice = lastD1TickPrices[asset];
+    const lastTime = lastD1TickTimes[asset] || 0;
+    const priceChanged = (lastPrice === undefined || Math.abs(currentPrice - lastPrice) > 0.0001);
+
+    if (!priceChanged && (timestamp - lastTime < 60000)) {
+        return; // Unchanged price within 60s -> skip D1 write
+    }
+
+    lastD1TickPrices[asset] = currentPrice;
+    lastD1TickTimes[asset] = timestamp;
+
     try {
         await queryD1(
             "INSERT INTO intraday_prices (asset, price, timestamp) VALUES (?, ?, ?)",
             [asset, currentPrice, timestamp]
         );
-        logDebug(`[TICK] Inserted ${asset}: ${currentPrice}`);
+        logDebug(`[TICK D1] Inserted ${asset}: ${currentPrice}`);
     } catch (e) {
         logDebug(`[TICK ERROR] Failed to save tick for ${asset}: ${e.message}`);
     }
@@ -245,10 +318,15 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
         cached.timestamp = timestamp;
     }
 
-    // 2. Throttled async update to D1 (once every 30s per asset) using clean UPDATE / INSERT
+    // 2. Market Open Check: If market is closed, do NOT write to D1!
+    if (!isAssetMarketOpenNow(asset)) {
+        return;
+    }
+
+    // 3. Throttled async update to D1 (once every 5 minutes / 300s per asset) using clean UPDATE / INSERT
     const now = Date.now();
     const lastSync = lastD1OhlcSync[asset] || 0;
-    if (now - lastSync >= 30000) {
+    if (now - lastSync >= 300000) {
         lastD1OhlcSync[asset] = now;
         try {
             const current = inMemoryOhlc[asset];
@@ -456,13 +534,8 @@ async function syncHarikalaBroadcast() {
         const lines = raw.split("\n");
         const dateStr = getIstDateString();
         
-        const d = new Date();
-        const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
-        const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
-        
-        const startSeconds = 9 * 3600 + 10; // 09:00:10 AM IST
-        const endSeconds = 23 * 3600 + 50 * 60; // 11:50:00 PM IST
-        const isMcxGstMarketOpen = secondsSinceMidnight >= startSeconds && secondsSinceMidnight <= endSeconds;
+        const isMcxGstMarketOpen = isMcxMarketOpenNow();
+        const isSpotOpen = isSpotMarketOpenNow();
         
         for (let line of lines) {
             line = line.trim();
@@ -485,36 +558,40 @@ async function syncHarikalaBroadcast() {
                 const spotDateStr = getSpotAssetDateString();
                 await saveDailySummary("XAU_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAU_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} with date ${spotDateStr}`);
+                if (isSpotOpen) {
+                    logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} with date ${spotDateStr}`);
+                }
             }
             else if (name === "SILVER") {
                 // Spot Silver
                 const spotDateStr = getSpotAssetDateString();
                 await saveDailySummary("XAG_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
                 await saveIntradayTick("XAG_USD", closeVal);
-                logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
+                if (isSpotOpen) {
+                    logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
+                }
             }
             else if (name === "GOLD FUTURE") {
-                // MCX Gold Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
+                // MCX Gold Future
+                await saveDailySummary("GOLD_MCX", dateStr, openVal, highVal, lowVal, closeVal);
+                await saveIntradayTick("GOLD_MCX", closeVal);
                 if (isMcxGstMarketOpen) {
-                    await saveDailySummary("GOLD_MCX", dateStr, openVal, highVal, lowVal, closeVal);
-                    await saveIntradayTick("GOLD_MCX", closeVal);
                     logDebug(`[HARIKALA-MCX] Synced GOLD_MCX: ${closeVal}`);
                 }
             }
             else if (name === "SILVER FUTURE") {
-                // MCX Silver Future (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
+                // MCX Silver Future
+                await saveDailySummary("SILVER_MCX", dateStr, openVal, highVal, lowVal, closeVal);
+                await saveIntradayTick("SILVER_MCX", closeVal);
                 if (isMcxGstMarketOpen) {
-                    await saveDailySummary("SILVER_MCX", dateStr, openVal, highVal, lowVal, closeVal);
-                    await saveIntradayTick("SILVER_MCX", closeVal);
                     logDebug(`[HARIKALA-MCX] Synced SILVER_MCX: ${closeVal}`);
                 }
             }
             else if (name === "GOLD 999 IMP WITH GST (Today)") {
-                // GST Gold (Only during active trading hours: 09:00:10 AM - 11:50:00 PM IST)
+                // GST Gold
+                await saveDailySummary("GOLD_999_GST", dateStr, openVal, highVal, lowVal, closeVal);
+                await saveIntradayTick("GOLD_999_GST", closeVal);
                 if (isMcxGstMarketOpen) {
-                    await saveDailySummary("GOLD_999_GST", dateStr, openVal, highVal, lowVal, closeVal);
-                    await saveIntradayTick("GOLD_999_GST", closeVal);
                     logDebug(`[HARIKALA-SPOT] Synced GOLD_999_GST: ${closeVal}`);
                 }
             }
