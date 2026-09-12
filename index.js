@@ -203,9 +203,9 @@ function isGstMarketOpenNow() {
 
     const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
     
-    // Saturday: Physical bullion market is open (09:00 AM to 08:30 PM IST)
+    // Saturday: Physical bullion market is open (09:00:10 AM to 08:30:00 PM IST)
     if (istDay === 6) {
-        const startSecondsSat = 9 * 3600; // 09:00:00 AM IST
+        const startSecondsSat = 9 * 3600 + 10; // 09:00:10 AM IST
         const endSecondsSat = 20 * 3600 + 30 * 60; // 08:30:00 PM IST
         return secondsSinceMidnight >= startSecondsSat && secondsSinceMidnight <= endSecondsSat;
     }
@@ -333,26 +333,41 @@ async function saveDailySummary(asset, dateStr, open, high, low, close) {
     const timestamp = Date.now();
     const isCorruptedOpen = (val) => (!val || val <= 0 || val === 4521.45 || val === 4522.65 || val === 4333.85);
 
+    // Guard: Do not record or update daily summary if the asset's market is closed
+    if ((asset === "GOLD_MCX" || asset === "SILVER_MCX") && !isMcxMarketOpenNow()) {
+        return;
+    }
+    if (asset === "GOLD_999_GST" && !isGstMarketOpenNow()) {
+        return;
+    }
+    if ((asset === "XAU_USD" || asset === "XAG_USD") && !isSpotMarketOpenNow()) {
+        return;
+    }
+
     // 1. ALWAYS update inMemoryOhlc immediately in RAM (Zero latency, 100% immune to D1 errors)
     if (!inMemoryOhlc[asset] || inMemoryOhlc[asset].date !== dateStr) {
-        const finalOpen = !isCorruptedOpen(open) ? open : close;
+        // First tick at or after 09:00:10 AM IST establishes the REAL OPEN for today
+        const initialOpen = (!isCorruptedOpen(open) && open > 0) ? open : close;
         inMemoryOhlc[asset] = {
             asset,
             date: dateStr,
-            open: finalOpen,
-            high: Math.max(high || 0.0, close),
-            low: low > 0 ? low : close,
+            open: initialOpen,
+            high: Math.max(high || 0.0, initialOpen, close),
+            low: (low > 0 && low < initialOpen) ? low : Math.min(initialOpen, close),
             close: close,
             timestamp: timestamp
         };
     } else {
         const cached = inMemoryOhlc[asset];
+        // Open is strictly locked once set for the day - never change cached.open unless it was corrupted
         if (isCorruptedOpen(cached.open) && !isCorruptedOpen(open)) {
             cached.open = open;
         }
         cached.high = Math.max(cached.high || 0.0, high || 0.0, close);
         if (low > 0) {
-            cached.low = cached.low > 0 ? Math.min(cached.low, low) : low;
+            cached.low = cached.low > 0 ? Math.min(cached.low, low, close) : Math.min(low, close);
+        } else {
+            cached.low = cached.low > 0 ? Math.min(cached.low, close) : close;
         }
         cached.close = close;
         cached.timestamp = timestamp;
@@ -591,43 +606,48 @@ async function syncHarikalaBroadcast() {
             
             if (name === "GOLD") {
                 // Spot Gold
-                const spotDateStr = getSpotAssetDateString();
-                await saveDailySummary("XAU_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
-                await saveIntradayTick("XAU_USD", closeVal);
+                lastPrices["XAU_USD"] = closeVal;
                 if (isSpotOpen) {
+                    const spotDateStr = getSpotAssetDateString();
+                    await saveDailySummary("XAU_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
+                    await saveIntradayTick("XAU_USD", closeVal);
                     logDebug(`[HARIKALA-SPOT] Synced XAU_USD: ${closeVal} with date ${spotDateStr}`);
                 }
             }
             else if (name === "SILVER") {
                 // Spot Silver
-                const spotDateStr = getSpotAssetDateString();
-                await saveDailySummary("XAG_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
-                await saveIntradayTick("XAG_USD", closeVal);
+                lastPrices["XAG_USD"] = closeVal;
                 if (isSpotOpen) {
+                    const spotDateStr = getSpotAssetDateString();
+                    await saveDailySummary("XAG_USD", spotDateStr, closeVal, closeVal, closeVal, closeVal);
+                    await saveIntradayTick("XAG_USD", closeVal);
                     logDebug(`[HARIKALA-SPOT] Synced XAG_USD: ${closeVal} with date ${spotDateStr}`);
                 }
             }
             else if (name === "GOLD FUTURE") {
                 // MCX Gold Future
-                await saveDailySummary("GOLD_MCX", dateStr, openVal, highVal, lowVal, closeVal);
-                await saveIntradayTick("GOLD_MCX", closeVal);
+                lastPrices["GOLD_MCX"] = closeVal;
                 if (isMcxMarketOpen) {
+                    await saveDailySummary("GOLD_MCX", dateStr, openVal, highVal, lowVal, closeVal);
+                    await saveIntradayTick("GOLD_MCX", closeVal);
                     logDebug(`[HARIKALA-MCX] Synced GOLD_MCX: ${closeVal}`);
                 }
             }
             else if (name === "SILVER FUTURE") {
                 // MCX Silver Future
-                await saveDailySummary("SILVER_MCX", dateStr, openVal, highVal, lowVal, closeVal);
-                await saveIntradayTick("SILVER_MCX", closeVal);
+                lastPrices["SILVER_MCX"] = closeVal;
                 if (isMcxMarketOpen) {
+                    await saveDailySummary("SILVER_MCX", dateStr, openVal, highVal, lowVal, closeVal);
+                    await saveIntradayTick("SILVER_MCX", closeVal);
                     logDebug(`[HARIKALA-MCX] Synced SILVER_MCX: ${closeVal}`);
                 }
             }
             else if (name === "GOLD 999 IMP WITH GST (Today)") {
                 // GST Gold
-                await saveDailySummary("GOLD_999_GST", dateStr, openVal, highVal, lowVal, closeVal);
-                await saveIntradayTick("GOLD_999_GST", closeVal);
+                lastPrices["GOLD_999_GST"] = closeVal;
                 if (isGstOpen) {
+                    await saveDailySummary("GOLD_999_GST", dateStr, openVal, highVal, lowVal, closeVal);
+                    await saveIntradayTick("GOLD_999_GST", closeVal);
                     logDebug(`[HARIKALA-GST] Synced GOLD_999_GST: ${closeVal}`);
                 }
             }
@@ -1360,8 +1380,14 @@ http.createServer(async (req, res) => {
                 const datesList = results.map(r => r.date).filter(Boolean);
 
                 const todayStr = getIstDateString();
-                if (!datesList.includes(todayStr)) {
-                    datesList.unshift(todayStr);
+                const istDay = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCDay();
+                const isWeekend = (istDay === 0 || istDay === 6);
+                const isMcx = (asset === "GOLD_MCX" || asset === "SILVER_MCX");
+
+                if (!isMcx || !isWeekend) {
+                    if (!datesList.includes(todayStr)) {
+                        datesList.unshift(todayStr);
+                    }
                 }
 
                 const jsonStr = JSON.stringify(datesList);
@@ -1389,7 +1415,8 @@ http.createServer(async (req, res) => {
 
             // 1. If requested date is today, ALWAYS SERVE DIRECTLY FROM RAM (0 D1 READS!)
             if (isToday) {
-                const ticks = inMemoryTicks[asset] || [];
+                const rawTicks = inMemoryTicks[asset] || [];
+                const ticks = rawTicks.filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(ticks));
                 return;
@@ -1954,6 +1981,47 @@ async function deduplicateD1PricesTable() {
     }
 }
 
+// Remove any phantom weekend rows created for MCX (since MCX is closed on weekends)
+async function cleanupWeekendMcxRows() {
+    try {
+        const res = await queryD1("DELETE FROM prices WHERE asset IN ('GOLD_MCX', 'SILVER_MCX') AND date = '2026-09-12'");
+        if (res?.result?.[0]?.meta?.changes > 0) {
+            logDebug(`[CLEANUP] Removed ${res.result[0].meta.changes} fake Saturday MCX rows from D1.`);
+        }
+    } catch (e) {
+        logDebug(`[CLEANUP ERROR] ${e.message}`);
+    }
+}
+
+// Preload latest OHLC from Cloudflare D1 so server restarts never lose or overwrite morning Open
+async function preloadLatestOhlcFromD1() {
+    try {
+        logDebug("[STARTUP] Preloading latest OHLC from Cloudflare D1 into inMemoryOhlc...");
+        const assets = ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
+        for (const asset of assets) {
+            const res = await queryD1(
+                "SELECT asset, date, open, high, low, close, timestamp FROM prices WHERE asset = ? ORDER BY date DESC, id DESC LIMIT 1",
+                [asset]
+            );
+            const row = res.result?.[0]?.results?.[0];
+            if (row && row.open > 0) {
+                inMemoryOhlc[asset] = {
+                    asset: row.asset,
+                    date: row.date,
+                    open: row.open,
+                    high: row.high,
+                    low: row.low,
+                    close: row.close,
+                    timestamp: row.timestamp || Date.now()
+                };
+                logDebug(`[PRELOAD OHLC] Loaded ${asset} (${row.date}): O=${row.open}, H=${row.high}, L=${row.low}, C=${row.close}`);
+            }
+        }
+    } catch (e) {
+        logDebug(`[PRELOAD OHLC ERROR] ${e.message}`);
+    }
+}
+
 // Create database indexes on launch to optimize queries
 async function initDatabaseIndexes() {
     try {
@@ -1965,6 +2033,8 @@ async function initDatabaseIndexes() {
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         await ensureHistoricalBaselines();
+        await cleanupWeekendMcxRows();
+        await preloadLatestOhlcFromD1();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
     }
