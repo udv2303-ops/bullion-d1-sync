@@ -115,42 +115,82 @@ function getIstDateString() {
 }
 
 // Check if a date is in US Daylight Saving Time (DST)
-function isUsDst(date) {
-    const year = date.getFullYear();
-    
-    // US DST starts on the second Sunday of March
-    let marchSunday = new Date(year, 2, 8); // March 8th
-    while (marchSunday.getDay() !== 0) {
-        marchSunday.setDate(marchSunday.getDate() + 1);
-    }
-    
-    // US DST ends on the first Sunday of November
-    let novSunday = new Date(year, 10, 1); // November 1st
-    while (novSunday.getDay() !== 0) {
-        novSunday.setDate(novSunday.getDate() + 1);
-    }
-    
-    return date >= marchSunday && date < novSunday;
+function isUsDst(date = new Date()) {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        timeZoneName: 'short'
+    });
+    const parts = dtf.formatToParts(date);
+    const tzPart = parts.find(p => p.type === 'timeZoneName');
+    // In US Eastern: EDT = Daylight Saving Time, EST = Standard Time
+    return tzPart ? tzPart.value === 'EDT' : true;
 }
 
-// Get date string for an asset based on US DST (for Spot assets) or normal IST (for others)
-function getAssetDateStringForTimestamp(asset, timestampMs) {
-    const istTimeMs = timestampMs + (5.5 * 60 * 60 * 1000);
-    const istDate = new Date(istTimeMs);
-    
-    if (asset === "XAU_USD" || asset === "XAG_USD") {
-        const dst = isUsDst(istDate);
-        const shiftMinutes = dst ? (3 * 60 + 31) : (4 * 60 + 31); // Summer: 3:31:00 AM to 2:30:59 AM IST | Winter: 4:31:00 AM to 3:30:59 AM IST
-        const shiftedDate = new Date(istTimeMs - shiftMinutes * 60 * 1000);
-        return shiftedDate.toISOString().split('T')[0];
+// Calculate the exact CME Globex trade date (YYYY-MM-DD) for any given timestamp
+function getComexTradeDate(dateObj = new Date()) {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        hour12: false,
+        weekday: 'short',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: 'numeric',
+        minute: 'numeric'
+    });
+    const parts = dtf.formatToParts(dateObj);
+    let weekday = '', year = 0, month = 0, day = 0, hour = 0, minute = 0;
+    for (const { type, value } of parts) {
+        if (type === 'weekday') weekday = value;
+        if (type === 'year') year = parseInt(value, 10);
+        if (type === 'month') month = parseInt(value, 10);
+        if (type === 'day') day = parseInt(value, 10);
+        if (type === 'hour') hour = parseInt(value, 10);
+        if (type === 'minute') minute = parseInt(value, 10);
+    }
+
+    const nyDate = new Date(Date.UTC(year, month - 1, day));
+
+    if (weekday === 'Sun') {
+        if (hour >= 18) {
+            // Sunday evening (18:00 ET) opens the Monday trading session
+            nyDate.setUTCDate(nyDate.getUTCDate() + 1);
+        } else {
+            // Sunday before 18:00 is weekend; the last completed trade date was Friday (-2 days)
+            nyDate.setUTCDate(nyDate.getUTCDate() - 2);
+        }
+    } else if (weekday === 'Sat') {
+        // Saturday is weekend; belongs to Friday's completed trade date (-1 day)
+        nyDate.setUTCDate(nyDate.getUTCDate() - 1);
+    } else if (weekday === 'Fri') {
+        // Friday is Friday trade date
     } else {
+        // Monday through Thursday: After 18:00 ET, trading advances to the next day's trade date
+        if (hour >= 18) {
+            nyDate.setUTCDate(nyDate.getUTCDate() + 1);
+        }
+    }
+
+    const resY = nyDate.getUTCFullYear();
+    const resM = String(nyDate.getUTCMonth() + 1).padStart(2, '0');
+    const resD = String(nyDate.getUTCDate()).padStart(2, '0');
+    return `${resY}-${resM}-${resD}`;
+}
+
+// Get date string for an asset (CME trade date for Spot assets, or IST date for others)
+function getAssetDateStringForTimestamp(asset, timestampMs) {
+    if (asset === "XAU_USD" || asset === "XAG_USD") {
+        return getComexTradeDate(new Date(timestampMs));
+    } else {
+        const istTimeMs = timestampMs + (5.5 * 60 * 60 * 1000);
+        const istDate = new Date(istTimeMs);
         return istDate.toISOString().split('T')[0];
     }
 }
 
-// Get shifted date string for spot gold/silver based on US DST (3:31 AM Summer / 4:31 AM Winter transition)
+// Get shifted date string for spot gold/silver based on current CME Globex session
 function getSpotAssetDateString() {
-    return getAssetDateStringForTimestamp("XAU_USD", Date.now());
+    return getComexTradeDate(new Date());
 }
 
 // Check if MCX Bullion market is actively open right now (09:00:10 AM to 11:50:00 PM IST, 7 days a week)
@@ -163,9 +203,40 @@ function isMcxMarketOpenNow() {
     return secondsSinceMidnight >= startSeconds && secondsSinceMidnight <= endSeconds;
 }
 
-// Check if International Spot Gold / Silver market is actively open right now (Active 7 days a week continuously when feed is broadcasting)
-function isSpotMarketOpenNow() {
-    return true;
+// Check if International CME Globex Spot Gold / Silver market is actively open right now
+function isSpotMarketOpenNow(dateObj = new Date()) {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        hour12: false,
+        weekday: 'short',
+        hour: 'numeric',
+        minute: 'numeric'
+    });
+    const parts = dtf.formatToParts(dateObj);
+    let weekday = '', hour = 0, minute = 0;
+    for (const { type, value } of parts) {
+        if (type === 'weekday') weekday = value;
+        if (type === 'hour') hour = parseInt(value, 10);
+        if (type === 'minute') minute = parseInt(value, 10);
+    }
+    const totalMinutes = hour * 60 + minute;
+
+    // Saturday: completely closed all day
+    if (weekday === 'Sat') return false;
+
+    // Sunday: closed until 18:00 ET (6:00 PM)
+    if (weekday === 'Sun') {
+        return totalMinutes >= 18 * 60;
+    }
+
+    // Friday: closes at 17:00 ET (5:00 PM) for the weekend
+    if (weekday === 'Fri') {
+        return totalMinutes < 17 * 60;
+    }
+
+    // Monday - Thursday: closed during 1-hour maintenance break (17:00 - 18:00 ET)
+    const isDailyBreak = (totalMinutes >= 17 * 60 && totalMinutes < 18 * 60);
+    return !isDailyBreak;
 }
 
 // Check if Indian GST Bullion (physical spot) market is actively open right now (09:00:10 AM to 11:50:00 PM IST, 7 days a week)
@@ -206,11 +277,15 @@ function getTimestampRangeForDate(asset, dateStr) {
     let endMs = midnightIstMs + 24 * 60 * 60 * 1000 - 1;
     
     if (asset === "XAU_USD" || asset === "XAG_USD") {
-        const dateForDst = new Date(midnightIstMs);
+        const dateForDst = new Date(midnightIstMs + 12 * 3600 * 1000);
         const dst = isUsDst(dateForDst);
-        const shiftMs = dst ? ((3 * 3600 + 31 * 60) * 1000) : ((4 * 3600 + 31 * 60) * 1000);
-        startMs += shiftMs;
-        endMs += shiftMs;
+        // Summer DST (EDT): Session opens 03:30:00 AM IST on dateStr, closes 02:30:00 AM IST next day (break up to 03:29:59 AM)
+        // Winter EST: Session opens 04:30:00 AM IST on dateStr, closes 03:30:00 AM IST next day (break up to 04:29:59 AM)
+        const openOffsetMs = dst ? (3 * 3600 + 30 * 60) * 1000 : (4 * 3600 + 30 * 60) * 1000;
+        const sessionEndMs = dst ? (24 * 3600 + 3 * 3600 + 29 * 60 + 59) * 1000 : (24 * 3600 + 4 * 3600 + 29 * 60 + 59) * 1000;
+        
+        startMs = midnightIstMs + openOffsetMs;
+        endMs = midnightIstMs + sessionEndMs;
     } else if (asset === "GOLD_MCX" || asset === "SILVER_MCX" || asset === "GOLD_999_GST") {
         // Explicit 9:00:10 AM IST to 11:55:10 PM IST session range for MCX & GST
         startMs = midnightIstMs + (9 * 3600 + 10) * 1000;
@@ -630,13 +705,23 @@ async function syncHarikalaBroadcast() {
     }
 }
 
-let lastProcessedIstDate = getIstDateString();
+let lastProcessedMcxDate = getIstDateString();
+let lastProcessedSpotDate = getSpotAssetDateString();
 
-async function autoArchiveDay(completedDate) {
-    logDebug(`[AUTO-ARCHIVE MIDNIGHT] Consolidating day ${completedDate} into 1 row per asset and updating historical OHLC...`);
-    const assets = ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
+async function autoArchiveDay(completedDate, assetList = null) {
+    const assets = assetList || ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
+    logDebug(`[AUTO-ARCHIVE] Consolidating day ${completedDate} for assets: ${assets.join(', ')}...`);
     for (const asset of assets) {
         try {
+            const isSpot = (asset === "XAU_USD" || asset === "XAG_USD");
+            // If spot asset and date is weekend (Sat/Sun), do not archive or create weekend rows
+            if (isSpot) {
+                const dayOfWeek = new Date(completedDate + 'T12:00:00Z').getUTCDay();
+                if (dayOfWeek === 0 || dayOfWeek === 6) {
+                    continue;
+                }
+            }
+
             // Check if already archived
             const checkRes = await queryD1(
                 "SELECT id, ticks_json FROM daily_tick_archives WHERE asset = ? AND date = ? LIMIT 1",
@@ -653,45 +738,64 @@ async function autoArchiveDay(completedDate) {
             const range = getTimestampRangeForDate(asset, completedDate);
             if (!range && dayTicks.length === 0) continue;
 
-            if (dayTicks.length === 0 && range) {
+            // For spot assets, always look for post-midnight ticks in intraday_minute_ticks even if dayTicks has rows
+            if (range && (dayTicks.length === 0 || isSpot)) {
                 // 1. Gather ticks from intraday_minute_ticks
                 const bucketRes = await queryD1(
                     "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp ASC",
                     [asset, range.startMs, range.endMs]
                 );
                 const bucketRows = bucketRes.result?.[0]?.results || [];
+                const seenTs = new Set(dayTicks.map(t => t.timestamp));
                 for (const row of bucketRows) {
                     try {
                         const parsed = JSON.parse(row.ticks_json);
                         if (Array.isArray(parsed)) {
-                            dayTicks.push(...parsed);
+                            for (const t of parsed) {
+                                if (t && !seenTs.has(t.timestamp)) {
+                                    dayTicks.push(t);
+                                    seenTs.add(t.timestamp);
+                                }
+                            }
                         }
                     } catch (e) {}
                 }
 
-                // 2. Fallback to inMemoryTicks if minute bucket was empty
-                if (dayTicks.length === 0 && inMemoryTicks[asset]) {
-                    dayTicks = inMemoryTicks[asset]
-                        .filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs)
-                        .sort((a, b) => a.timestamp - b.timestamp);
+                // 2. Fallback to inMemoryTicks if needed
+                if (inMemoryTicks[asset]) {
+                    const memInRange = inMemoryTicks[asset].filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs);
+                    for (const t of memInRange) {
+                        if (t && !seenTs.has(t.timestamp)) {
+                            dayTicks.push(t);
+                            seenTs.add(t.timestamp);
+                        }
+                    }
                 }
 
-                // 3. Fallback to legacy intraday_prices table
+                // 3. Fallback to legacy intraday_prices table if still empty
                 if (dayTicks.length === 0) {
                     const legacyRes = await queryD1(
                         "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
                         [asset, range.startMs, range.endMs]
                     );
-                    dayTicks = legacyRes.result?.[0]?.results || [];
+                    const legRows = legacyRes.result?.[0]?.results || [];
+                    for (const r of legRows) {
+                        const ts = Number(r.timestamp);
+                        if (!seenTs.has(ts)) {
+                            dayTicks.push({ timestamp: ts, price: Number(r.price) });
+                            seenTs.add(ts);
+                        }
+                    }
                 }
 
                 if (dayTicks.length > 0) {
+                    dayTicks.sort((a, b) => a.timestamp - b.timestamp);
                     const jsonStr = JSON.stringify(dayTicks);
                     await queryD1(
                         "INSERT OR REPLACE INTO daily_tick_archives (asset, date, ticks_json) VALUES (?, ?, ?)",
                         [asset, completedDate, jsonStr]
                     );
-                    logDebug(`[AUTO-ARCHIVE MIDNIGHT] Successfully consolidated ${dayTicks.length} ticks for ${asset} on ${completedDate} into 1 single row!`);
+                    logDebug(`[AUTO-ARCHIVE] Successfully consolidated ${dayTicks.length} ticks for ${asset} on ${completedDate} into 1 single row!`);
 
                     // Clean up intermediate minute ticks for completed past day to save database storage
                     await queryD1(
@@ -730,7 +834,7 @@ async function autoArchiveDay(completedDate) {
                 logDebug(`[AUTO-ARCHIVE OHLC] Synchronized prices table for ${asset} on ${completedDate}: O=${open}, H=${high}, L=${low}, C=${close}`);
             }
         } catch (err) {
-            logDebug(`[AUTO-ARCHIVE MIDNIGHT ERROR] ${asset} on ${completedDate}: ${err.message}`);
+            logDebug(`[AUTO-ARCHIVE ERROR] ${asset} on ${completedDate}: ${err.message}`);
         }
     }
 }
@@ -739,19 +843,34 @@ async function autoArchiveDay(completedDate) {
 async function runSyncCycle() {
     logDebug(`[SYNC CYCLE START]`);
 
-    // Midnight Rollover Check: When date changes, auto-archive previous completed day into 1 single row
+    // 1. MCX & Indian GST Midnight Rollover Check (00:00:00 IST)
     const currentIstDate = getIstDateString();
-    if (currentIstDate !== lastProcessedIstDate) {
-        const completedDate = lastProcessedIstDate;
-        lastProcessedIstDate = currentIstDate;
-        // Flush remaining buffers before archiving
-        for (const asset of Object.keys(currentMinuteTicks)) {
+    if (currentIstDate !== lastProcessedMcxDate) {
+        const completedDate = lastProcessedMcxDate;
+        lastProcessedMcxDate = currentIstDate;
+        logDebug(`[MCX MIDNIGHT ROLLOVER] Consolidating completed MCX day ${completedDate}...`);
+        for (const asset of ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST"]) {
             if (currentMinuteTicks[asset] && currentMinuteTicks[asset].length > 0) {
                 await flushMinuteToD1(asset, currentMinuteKey[asset], currentMinuteTicks[asset]);
                 currentMinuteTicks[asset] = [];
             }
         }
-        await autoArchiveDay(completedDate);
+        await autoArchiveDay(completedDate, ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST"]);
+    }
+
+    // 2. COMEX Spot Bullion Session Rollover Check (03:30 AM Summer / 04:30 AM Winter IST, or Monday open)
+    const currentSpotDate = getSpotAssetDateString();
+    if (currentSpotDate !== lastProcessedSpotDate) {
+        const completedSpotDate = lastProcessedSpotDate;
+        lastProcessedSpotDate = currentSpotDate;
+        logDebug(`[COMEX SESSION ROLLOVER] Consolidating completed COMEX session ${completedSpotDate}...`);
+        for (const asset of ["XAU_USD", "XAG_USD"]) {
+            if (currentMinuteTicks[asset] && currentMinuteTicks[asset].length > 0) {
+                await flushMinuteToD1(asset, currentMinuteKey[asset], currentMinuteTicks[asset]);
+                currentMinuteTicks[asset] = [];
+            }
+        }
+        await autoArchiveDay(completedSpotDate, ["XAU_USD", "XAG_USD"]);
     }
 
     // Run all live sync queries
@@ -1386,9 +1505,17 @@ http.createServer(async (req, res) => {
                 const results = dbRes.result?.[0]?.results || [];
                 const datesList = results.map(r => r.date).filter(Boolean);
 
-                const todayStr = getIstDateString();
-                if (!datesList.includes(todayStr)) {
-                    datesList.unshift(todayStr);
+                const isSpot = (asset === "XAU_USD" || asset === "XAG_USD");
+                if (isSpot) {
+                    const spotDateStr = getSpotAssetDateString();
+                    if (isSpotMarketOpenNow() && !datesList.includes(spotDateStr)) {
+                        datesList.unshift(spotDateStr);
+                    }
+                } else {
+                    const todayStr = getIstDateString();
+                    if (!datesList.includes(todayStr)) {
+                        datesList.unshift(todayStr);
+                    }
                 }
 
                 const jsonStr = JSON.stringify(datesList);
@@ -1396,7 +1523,7 @@ http.createServer(async (req, res) => {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(jsonStr);
             } catch (err) {
-                const fallback = [getIstDateString()];
+                const fallback = (asset === "XAU_USD" || asset === "XAG_USD") ? [getSpotAssetDateString()] : [getIstDateString()];
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(fallback));
             }
@@ -1411,8 +1538,11 @@ http.createServer(async (req, res) => {
                 return;
             }
 
+            const isSpot = (asset === "XAU_USD" || asset === "XAG_USD");
             const todayAssetDate = getAssetDateStringForTimestamp(asset, Date.now());
-            const isToday = (date === todayAssetDate || date === getIstDateString() || date === getSpotAssetDateString());
+            const isToday = isSpot
+                ? (isSpotMarketOpenNow() && (date === todayAssetDate || date === getSpotAssetDateString()))
+                : (date === todayAssetDate || date === getIstDateString());
 
             // 1. If requested date is today, SERVE DIRECTLY FROM RAM (or load from D1 minute buckets if server recently started)
             if (isToday) {
@@ -1864,16 +1994,39 @@ http.createServer(async (req, res) => {
     console.log(`API proxy server is listening on port ${PORT}`);
 });
 
+// Remove any phantom weekend rows created for COMEX Spot assets (since CME Globex is closed on weekends)
+async function cleanupWeekendComexRows() {
+    try {
+        const resPrices = await queryD1(
+            "DELETE FROM prices WHERE asset IN ('XAU_USD', 'XAG_USD') AND (date = '2026-09-12' OR strftime('%w', date) IN ('0', '6'))"
+        );
+        const resArch = await queryD1(
+            "DELETE FROM daily_tick_archives WHERE asset IN ('XAU_USD', 'XAG_USD') AND (date = '2026-09-12' OR strftime('%w', date) IN ('0', '6'))"
+        );
+        historicalCache.delete("XAU_USD");
+        historicalCache.delete("XAG_USD");
+        loggedDatesCache.delete("XAU_USD");
+        loggedDatesCache.delete("XAG_USD");
+        const pCnt = resPrices?.result?.[0]?.meta?.changes || 0;
+        const aCnt = resArch?.result?.[0]?.meta?.changes || 0;
+        logDebug(`[CLEANUP COMEX] Purged weekend rows: prices=${pCnt}, archives=${aCnt}`);
+    } catch (e) {
+        logDebug(`[CLEANUP COMEX ERROR] ${e.message}`);
+    }
+}
+
 // Calculate and synchronize true daily OHLC from recorded intraday ticks for all assets
 async function recalculateAllOHLCFromTicks() {
     try {
         logDebug("[RECALC] Starting full recalculation of Historical OHLC from real ticks...");
+        await cleanupWeekendComexRows();
         const assets = ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
         const summary = {};
 
         for (const asset of assets) {
             summary[asset] = { updatedDates: 0, dates: [] };
             const datesSet = new Set();
+            const isSpot = (asset === "XAU_USD" || asset === "XAG_USD");
 
             // 1. Gather all dates from daily_tick_archives
             try {
@@ -1918,15 +2071,26 @@ async function recalculateAllOHLCFromTicks() {
                 }
             } catch (e) {}
 
-            // 4. Always include today and yesterday
-            datesSet.add(getIstDateString());
-            datesSet.add(getAssetDateStringForTimestamp(asset, Date.now()));
+            // 4. Always include active trading date and today
+            if (isSpot) {
+                datesSet.add(getSpotAssetDateString());
+            } else {
+                datesSet.add(getIstDateString());
+            }
 
             const sortedDates = Array.from(datesSet).sort().reverse();
             logDebug(`[RECALC] Checking ${sortedDates.length} candidate dates for ${asset}...`);
 
             for (const dateStr of sortedDates) {
                 try {
+                    // Skip Saturday & Sunday for COMEX Spot assets since exchange is closed
+                    if (isSpot) {
+                        const dayOfWeek = new Date(dateStr + 'T12:00:00Z').getUTCDay();
+                        if (dayOfWeek === 0 || dayOfWeek === 6) {
+                            continue;
+                        }
+                    }
+
                     let ticks = [];
 
                     // a. Check daily_tick_archives
@@ -1946,18 +2110,24 @@ async function recalculateAllOHLCFromTicks() {
 
                     const range = getTimestampRangeForDate(asset, dateStr);
 
-                    // b. Check intraday_minute_ticks if archive was empty
-                    if (ticks.length === 0 && range) {
+                    // b. Check intraday_minute_ticks (always for Spot assets to capture ticks after midnight up to 02:30 AM close)
+                    if (range && (ticks.length === 0 || isSpot)) {
                         const minRes = await queryD1(
                             "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp ASC",
                             [asset, range.startMs, range.endMs]
                         );
                         const minRows = minRes.result?.[0]?.results || [];
+                        const seenTs = new Set(ticks.map(t => t.timestamp));
                         for (const row of minRows) {
                             try {
                                 const parsed = JSON.parse(row.ticks_json);
                                 if (Array.isArray(parsed)) {
-                                    ticks.push(...parsed);
+                                    for (const t of parsed) {
+                                        if (t && !seenTs.has(t.timestamp)) {
+                                            ticks.push(t);
+                                            seenTs.add(t.timestamp);
+                                        }
+                                    }
                                 }
                             } catch (e) {}
                         }
@@ -1975,17 +2145,17 @@ async function recalculateAllOHLCFromTicks() {
                         }
                     }
 
-                    // d. If date is today, merge inMemoryTicks
-                    const todayAssetDate = getAssetDateStringForTimestamp(asset, Date.now());
-                    if (dateStr === todayAssetDate || dateStr === getIstDateString()) {
+                    // d. Merge inMemoryTicks across session range
+                    if (range && inMemoryTicks[asset]) {
                         const memTicks = inMemoryTicks[asset] || [];
-                        if (memTicks.length > 0 && range) {
+                        if (memTicks.length > 0) {
                             const inRangeMem = memTicks.filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs);
                             if (inRangeMem.length > 0) {
                                 const seen = new Set(ticks.map(t => t.timestamp));
                                 for (const t of inRangeMem) {
-                                    if (!seen.has(t.timestamp)) {
+                                    if (t && !seen.has(t.timestamp)) {
                                         ticks.push(t);
+                                        seen.add(t.timestamp);
                                     }
                                 }
                             }
@@ -1995,7 +2165,6 @@ async function recalculateAllOHLCFromTicks() {
                     // Filter valid positive ticks
                     const validTicks = ticks.filter(t => t && Number(t.price) > 0 && !isNaN(Number(t.price)));
                     if (validTicks.length === 0) {
-                        // No ticks found for this date (e.g. historical baseline dates before recording started)
                         continue;
                     }
 
@@ -2026,8 +2195,8 @@ async function recalculateAllOHLCFromTicks() {
                         );
                     }
 
-                    // If not yet archived in daily_tick_archives, archive now for 1-row fast reading
-                    if (!archRow && validTicks.length > 0) {
+                    // Write complete consolidated ticks to daily_tick_archives (especially after merging post-midnight ticks for Spot)
+                    if ((isSpot || !archRow) && validTicks.length > 0) {
                         try {
                             const jsonStr = JSON.stringify(validTicks);
                             await queryD1(
@@ -2090,16 +2259,12 @@ async function ensureHistoricalBaselines() {
             }
         };
 
-        // Spot Gold (XAU_USD)
-        await upsertPriceRow('XAU_USD', '2026-08-23', 4603.30, 4621.95, 4603.30, 4621.95);
-        await upsertPriceRow('XAU_USD', '2026-08-22', 4603.30, 4603.30, 4603.30, 4603.30);
+        // Spot Gold (XAU_USD) - Weekdays only
         await upsertPriceRow('XAU_USD', '2026-08-21', 4521.45, 4632.55, 4509.85, 4603.30);
         await upsertPriceRow('XAU_USD', '2026-08-20', 4522.65, 4540.80, 4451.10, 4519.20);
         await upsertPriceRow('XAU_USD', '2026-08-19', 4333.85, 4525.00, 4325.75, 4522.65);
 
-        // Spot Silver (XAG_USD)
-        await upsertPriceRow('XAG_USD', '2026-08-23', 69.00, 69.24, 69.00, 69.24);
-        await upsertPriceRow('XAG_USD', '2026-08-22', 69.00, 69.00, 69.00, 69.00);
+        // Spot Silver (XAG_USD) - Weekdays only
         await upsertPriceRow('XAG_USD', '2026-08-21', 68.23, 70.03, 67.95, 69.00);
         await upsertPriceRow('XAG_USD', '2026-08-20', 67.16, 68.99, 65.67, 68.22);
         await upsertPriceRow('XAG_USD', '2026-08-19', 63.35, 67.17, 62.59, 67.17);
