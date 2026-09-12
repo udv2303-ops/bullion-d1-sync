@@ -1403,10 +1403,41 @@ http.createServer(async (req, res) => {
             const todayAssetDate = getAssetDateStringForTimestamp(asset, Date.now());
             const isToday = (date === todayAssetDate || date === getIstDateString() || date === getSpotAssetDateString());
 
-            // 1. If requested date is today, ALWAYS SERVE DIRECTLY FROM RAM (0 D1 READS!)
+            // 1. If requested date is today, SERVE DIRECTLY FROM RAM (or load from D1 minute buckets if server recently started)
             if (isToday) {
-                const rawTicks = inMemoryTicks[asset] || [];
-                const ticks = rawTicks.filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs);
+                let rawTicks = inMemoryTicks[asset] || [];
+                let ticks = rawTicks.filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs);
+                
+                // If RAM has very few ticks (e.g. server recently restarted), fetch today's stored ticks from D1
+                if (ticks.length < 50) {
+                    try {
+                        const bucketRes = await queryD1(
+                            "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp DESC",
+                            [asset, range.startMs, range.endMs]
+                        );
+                        const bucketRows = bucketRes.result?.[0]?.results || [];
+                        const loadedTicks = [];
+                        for (const row of bucketRows) {
+                            try {
+                                const parsed = JSON.parse(row.ticks_json);
+                                if (Array.isArray(parsed)) {
+                                    loadedTicks.push(...parsed);
+                                }
+                            } catch (e) {}
+                        }
+                        if (loadedTicks.length > 0) {
+                            const existingTs = new Set(ticks.map(t => t.timestamp));
+                            for (const t of loadedTicks) {
+                                if (!existingTs.has(t.timestamp)) {
+                                    ticks.push(t);
+                                }
+                            }
+                            ticks.sort((a, b) => b.timestamp - a.timestamp);
+                            inMemoryTicks[asset] = ticks.slice(0, 10000);
+                        }
+                    } catch (e) {}
+                }
+
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(ticks));
                 return;
@@ -2000,6 +2031,47 @@ async function preloadLatestOhlcFromD1() {
     }
 }
 
+// Preload today's intraday minute ticks from D1 into inMemoryTicks on startup
+async function preloadTodayTicksFromD1() {
+    try {
+        logDebug("[STARTUP] Preloading today's minute ticks from Cloudflare D1 into inMemoryTicks...");
+        const assets = ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
+        const todayStr = getIstDateString();
+        for (const asset of assets) {
+            const range = getTimestampRangeForDate(asset, todayStr);
+            if (!range) continue;
+            const bucketRes = await queryD1(
+                "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp DESC",
+                [asset, range.startMs, range.endMs]
+            );
+            const bucketRows = bucketRes.result?.[0]?.results || [];
+            const loadedTicks = [];
+            for (const row of bucketRows) {
+                try {
+                    const parsed = JSON.parse(row.ticks_json);
+                    if (Array.isArray(parsed)) {
+                        loadedTicks.push(...parsed);
+                    }
+                } catch (e) {}
+            }
+            if (loadedTicks.length > 0) {
+                const existing = inMemoryTicks[asset] || [];
+                const existingTs = new Set(existing.map(t => t.timestamp));
+                for (const t of loadedTicks) {
+                    if (!existingTs.has(t.timestamp)) {
+                        existing.push(t);
+                    }
+                }
+                existing.sort((a, b) => b.timestamp - a.timestamp);
+                inMemoryTicks[asset] = existing.slice(0, 10000);
+                logDebug(`[PRELOAD TICKS] Preloaded ${loadedTicks.length} ticks from D1 for ${asset}`);
+            }
+        }
+    } catch (e) {
+        logDebug(`[PRELOAD TICKS ERROR] ${e.message}`);
+    }
+}
+
 // Create database indexes on launch to optimize queries
 async function initDatabaseIndexes() {
     try {
@@ -2012,6 +2084,7 @@ async function initDatabaseIndexes() {
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         await ensureHistoricalBaselines();
         await preloadLatestOhlcFromD1();
+        await preloadTodayTicksFromD1();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
     }
