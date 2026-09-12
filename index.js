@@ -1425,6 +1425,16 @@ http.createServer(async (req, res) => {
                                 }
                             } catch (e) {}
                         }
+                        if (loadedTicks.length < 50) {
+                            const dbRes = await queryD1(
+                                "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                                [asset, range.startMs, range.endMs]
+                            );
+                            const legRows = dbRes.result?.[0]?.results || [];
+                            for (const r of legRows) {
+                                loadedTicks.push({ timestamp: Number(r.timestamp), price: Number(r.price) });
+                            }
+                        }
                         if (loadedTicks.length > 0) {
                             const existingTs = new Set(ticks.map(t => t.timestamp));
                             for (const t of loadedTicks) {
@@ -2053,6 +2063,16 @@ async function preloadTodayTicksFromD1() {
                         loadedTicks.push(...parsed);
                     }
                 } catch (e) {}
+            }
+            if (loadedTicks.length < 50) {
+                const dbRes = await queryD1(
+                    "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC",
+                    [asset, range.startMs, range.endMs]
+                );
+                const legRows = dbRes.result?.[0]?.results || [];
+                for (const r of legRows) {
+                    loadedTicks.push({ timestamp: Number(r.timestamp), price: Number(r.price) });
+                }
             }
             if (loadedTicks.length > 0) {
                 const existing = inMemoryTicks[asset] || [];
