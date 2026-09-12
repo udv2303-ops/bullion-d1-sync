@@ -633,67 +633,101 @@ async function syncHarikalaBroadcast() {
 let lastProcessedIstDate = getIstDateString();
 
 async function autoArchiveDay(completedDate) {
-    logDebug(`[AUTO-ARCHIVE MIDNIGHT] Consolidating day ${completedDate} into 1 row per asset...`);
+    logDebug(`[AUTO-ARCHIVE MIDNIGHT] Consolidating day ${completedDate} into 1 row per asset and updating historical OHLC...`);
     const assets = ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
     for (const asset of assets) {
         try {
             // Check if already archived
             const checkRes = await queryD1(
-                "SELECT id FROM daily_tick_archives WHERE asset = ? AND date = ? LIMIT 1",
+                "SELECT id, ticks_json FROM daily_tick_archives WHERE asset = ? AND date = ? LIMIT 1",
                 [asset, completedDate]
             );
-            if (checkRes?.result?.[0]?.results?.length > 0) {
-                continue; // Already archived
-            }
-
-            const range = getTimestampRangeForDate(asset, completedDate);
-            if (!range) continue;
-
-            // 1. Gather ticks from intraday_minute_ticks
             let dayTicks = [];
-            const bucketRes = await queryD1(
-                "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp ASC",
-                [asset, range.startMs, range.endMs]
-            );
-            const bucketRows = bucketRes.result?.[0]?.results || [];
-            for (const row of bucketRows) {
+            const existingRow = checkRes?.result?.[0]?.results?.[0];
+            if (existingRow && existingRow.ticks_json) {
                 try {
-                    const parsed = JSON.parse(row.ticks_json);
-                    if (Array.isArray(parsed)) {
-                        dayTicks.push(...parsed);
-                    }
+                    dayTicks = JSON.parse(existingRow.ticks_json);
                 } catch (e) {}
             }
 
-            // 2. Fallback to inMemoryTicks if minute bucket was empty
-            if (dayTicks.length === 0 && inMemoryTicks[asset]) {
-                dayTicks = inMemoryTicks[asset]
-                    .filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs)
-                    .sort((a, b) => a.timestamp - b.timestamp);
-            }
+            const range = getTimestampRangeForDate(asset, completedDate);
+            if (!range && dayTicks.length === 0) continue;
 
-            // 3. Fallback to legacy intraday_prices table
-            if (dayTicks.length === 0) {
-                const legacyRes = await queryD1(
-                    "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+            if (dayTicks.length === 0 && range) {
+                // 1. Gather ticks from intraday_minute_ticks
+                const bucketRes = await queryD1(
+                    "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp ASC",
                     [asset, range.startMs, range.endMs]
                 );
-                dayTicks = legacyRes.result?.[0]?.results || [];
+                const bucketRows = bucketRes.result?.[0]?.results || [];
+                for (const row of bucketRows) {
+                    try {
+                        const parsed = JSON.parse(row.ticks_json);
+                        if (Array.isArray(parsed)) {
+                            dayTicks.push(...parsed);
+                        }
+                    } catch (e) {}
+                }
+
+                // 2. Fallback to inMemoryTicks if minute bucket was empty
+                if (dayTicks.length === 0 && inMemoryTicks[asset]) {
+                    dayTicks = inMemoryTicks[asset]
+                        .filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs)
+                        .sort((a, b) => a.timestamp - b.timestamp);
+                }
+
+                // 3. Fallback to legacy intraday_prices table
+                if (dayTicks.length === 0) {
+                    const legacyRes = await queryD1(
+                        "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+                        [asset, range.startMs, range.endMs]
+                    );
+                    dayTicks = legacyRes.result?.[0]?.results || [];
+                }
+
+                if (dayTicks.length > 0) {
+                    const jsonStr = JSON.stringify(dayTicks);
+                    await queryD1(
+                        "INSERT OR REPLACE INTO daily_tick_archives (asset, date, ticks_json) VALUES (?, ?, ?)",
+                        [asset, completedDate, jsonStr]
+                    );
+                    logDebug(`[AUTO-ARCHIVE MIDNIGHT] Successfully consolidated ${dayTicks.length} ticks for ${asset} on ${completedDate} into 1 single row!`);
+
+                    // Clean up intermediate minute ticks for completed past day to save database storage
+                    await queryD1(
+                        "DELETE FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ?",
+                        [asset, range.startMs, range.endMs]
+                    );
+                }
             }
 
-            if (dayTicks.length > 0) {
-                const jsonStr = JSON.stringify(dayTicks);
-                await queryD1(
-                    "INSERT OR REPLACE INTO daily_tick_archives (asset, date, ticks_json) VALUES (?, ?, ?)",
-                    [asset, completedDate, jsonStr]
+            // Calculate and synchronize final daily OHLC to prices table directly from ticks
+            const validTicks = dayTicks.filter(t => t && Number(t.price) > 0 && !isNaN(Number(t.price)));
+            if (validTicks.length > 0) {
+                validTicks.sort((a, b) => a.timestamp - b.timestamp);
+                const open = Number(validTicks[0].price);
+                const close = Number(validTicks[validTicks.length - 1].price);
+                let high = open;
+                let low = open;
+                for (let i = 0; i < validTicks.length; i++) {
+                    const p = Number(validTicks[i].price);
+                    if (p > high) high = p;
+                    if (p < low && p > 0) low = p;
+                }
+                const lastTs = validTicks[validTicks.length - 1].timestamp || Date.now();
+                const updRes = await queryD1(
+                    "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE asset = ? AND date = ?",
+                    [open, high, low, close, lastTs, asset, completedDate]
                 );
-                logDebug(`[AUTO-ARCHIVE MIDNIGHT] Successfully consolidated ${dayTicks.length} ticks for ${asset} on ${completedDate} into 1 single row!`);
-
-                // Clean up intermediate minute ticks for completed past day to save database storage
-                await queryD1(
-                    "DELETE FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ?",
-                    [asset, range.startMs, range.endMs]
-                );
+                if (updRes?.result?.[0]?.meta?.changes === 0) {
+                    await queryD1(
+                        "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        [asset, completedDate, open, high, low, close, lastTs]
+                    );
+                }
+                historicalCache.delete(asset);
+                loggedDatesCache.delete(asset);
+                logDebug(`[AUTO-ARCHIVE OHLC] Synchronized prices table for ${asset} on ${completedDate}: O=${open}, H=${high}, L=${low}, C=${close}`);
             }
         } catch (err) {
             logDebug(`[AUTO-ARCHIVE MIDNIGHT ERROR] ${asset} on ${completedDate}: ${err.message}`);
@@ -1541,11 +1575,15 @@ http.createServer(async (req, res) => {
                 delTicksResult: { message: "Tick deletion is disabled. All live logs are kept forever." }
             }));
         }
-        else if (path === '/api/recalculate-ohlc') {
+        else if (path === '/api/recalculate-ohlc' || path === '/api/sync-historical-from-ticks') {
             try {
-                await recalculateAllOHLCFromTicks();
+                const summary = await recalculateAllOHLCFromTicks();
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, message: "Recalculated all OHLC from ticks for all 5 assets!" }));
+                res.end(JSON.stringify({ 
+                    success: true, 
+                    message: "Recalculated and synchronized all historical OHLC prices from recorded intraday ticks!", 
+                    summary 
+                }));
             } catch (e) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: e.message }));
@@ -1826,51 +1864,203 @@ http.createServer(async (req, res) => {
     console.log(`API proxy server is listening on port ${PORT}`);
 });
 
-// Create database indexes on launch to optimize queries
+// Calculate and synchronize true daily OHLC from recorded intraday ticks for all assets
 async function recalculateAllOHLCFromTicks() {
     try {
-        logDebug("Recalculating all OHLC daily summaries from intraday ticks for all 5 assets...");
-        const assets = ["XAU_USD", "XAG_USD", "GOLD_MCX", "SILVER_MCX", "GOLD_999_GST"];
-        
+        logDebug("[RECALC] Starting full recalculation of Historical OHLC from real ticks...");
+        const assets = ["GOLD_MCX", "SILVER_MCX", "GOLD_999_GST", "XAU_USD", "XAG_USD"];
+        const summary = {};
+
         for (const asset of assets) {
-            const dbRes = await queryD1(
-                "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts FROM intraday_prices WHERE asset = ?",
-                [asset]
-            );
-            const row = dbRes.result?.[0]?.results?.[0];
-            if (!row || row.min_ts === null || row.max_ts === null) continue;
+            summary[asset] = { updatedDates: 0, dates: [] };
+            const datesSet = new Set();
 
-            const dates = new Set();
-            for (let ts = row.min_ts; ts <= row.max_ts; ts += 3600 * 1000) {
-                dates.add(getAssetDateStringForTimestamp(asset, ts));
-            }
-            dates.add(getAssetDateStringForTimestamp(asset, row.max_ts));
-
-            for (const dateStr of Array.from(dates).sort()) {
-                const range = getTimestampRangeForDate(asset, dateStr);
-                if (!range) continue;
-
-                const ticksRes = await queryD1(
-                    "SELECT CAST(price AS REAL) as price FROM intraday_prices WHERE asset = ? AND CAST(timestamp AS INTEGER) >= ? AND CAST(timestamp AS INTEGER) <= ? ORDER BY CAST(timestamp AS INTEGER) ASC",
-                    [asset, range.startMs, range.endMs]
+            // 1. Gather all dates from daily_tick_archives
+            try {
+                const archRes = await queryD1(
+                    "SELECT DISTINCT date FROM daily_tick_archives WHERE asset = ?",
+                    [asset]
                 );
-                const ticks = ticksRes.result?.[0]?.results || [];
-                if (ticks.length > 0) {
-                    const open = ticks[0].price;
-                    const close = ticks[ticks.length - 1].price;
+                const rows = archRes.result?.[0]?.results || [];
+                for (const r of rows) {
+                    if (r.date) datesSet.add(r.date);
+                }
+            } catch (e) {
+                logDebug(`[RECALC ARCH ERROR] ${asset}: ${e.message}`);
+            }
+
+            // 2. Gather dates from prices table
+            try {
+                const pricesRes = await queryD1(
+                    "SELECT DISTINCT date FROM prices WHERE asset = ?",
+                    [asset]
+                );
+                const pRows = pricesRes.result?.[0]?.results || [];
+                for (const r of pRows) {
+                    if (r.date) datesSet.add(r.date);
+                }
+            } catch (e) {
+                logDebug(`[RECALC PRICES ERROR] ${asset}: ${e.message}`);
+            }
+
+            // 3. Gather dates from intraday_prices table range
+            try {
+                const legRes = await queryD1(
+                    "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts FROM intraday_prices WHERE asset = ?",
+                    [asset]
+                );
+                const row = legRes.result?.[0]?.results?.[0];
+                if (row && row.min_ts && row.max_ts) {
+                    for (let ts = Number(row.min_ts); ts <= Number(row.max_ts); ts += 86400 * 1000) {
+                        datesSet.add(getAssetDateStringForTimestamp(asset, ts));
+                    }
+                    datesSet.add(getAssetDateStringForTimestamp(asset, Number(row.max_ts)));
+                }
+            } catch (e) {}
+
+            // 4. Always include today and yesterday
+            datesSet.add(getIstDateString());
+            datesSet.add(getAssetDateStringForTimestamp(asset, Date.now()));
+
+            const sortedDates = Array.from(datesSet).sort().reverse();
+            logDebug(`[RECALC] Checking ${sortedDates.length} candidate dates for ${asset}...`);
+
+            for (const dateStr of sortedDates) {
+                try {
+                    let ticks = [];
+
+                    // a. Check daily_tick_archives
+                    const archRes = await queryD1(
+                        "SELECT ticks_json FROM daily_tick_archives WHERE asset = ? AND date = ? LIMIT 1",
+                        [asset, dateStr]
+                    );
+                    const archRow = archRes.result?.[0]?.results?.[0];
+                    if (archRow && archRow.ticks_json) {
+                        try {
+                            const parsed = JSON.parse(archRow.ticks_json);
+                            if (Array.isArray(parsed) && parsed.length > 0) {
+                                ticks = parsed;
+                            }
+                        } catch (e) {}
+                    }
+
+                    const range = getTimestampRangeForDate(asset, dateStr);
+
+                    // b. Check intraday_minute_ticks if archive was empty
+                    if (ticks.length === 0 && range) {
+                        const minRes = await queryD1(
+                            "SELECT minute_timestamp, ticks_json FROM intraday_minute_ticks WHERE asset = ? AND minute_timestamp >= ? AND minute_timestamp <= ? ORDER BY minute_timestamp ASC",
+                            [asset, range.startMs, range.endMs]
+                        );
+                        const minRows = minRes.result?.[0]?.results || [];
+                        for (const row of minRows) {
+                            try {
+                                const parsed = JSON.parse(row.ticks_json);
+                                if (Array.isArray(parsed)) {
+                                    ticks.push(...parsed);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+
+                    // c. Check legacy intraday_prices if still empty
+                    if (ticks.length === 0 && range) {
+                        const legTicksRes = await queryD1(
+                            "SELECT timestamp, price FROM intraday_prices WHERE asset = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+                            [asset, range.startMs, range.endMs]
+                        );
+                        const legTicks = legTicksRes.result?.[0]?.results || [];
+                        for (const r of legTicks) {
+                            ticks.push({ timestamp: Number(r.timestamp), price: Number(r.price) });
+                        }
+                    }
+
+                    // d. If date is today, merge inMemoryTicks
+                    const todayAssetDate = getAssetDateStringForTimestamp(asset, Date.now());
+                    if (dateStr === todayAssetDate || dateStr === getIstDateString()) {
+                        const memTicks = inMemoryTicks[asset] || [];
+                        if (memTicks.length > 0 && range) {
+                            const inRangeMem = memTicks.filter(t => t.timestamp >= range.startMs && t.timestamp <= range.endMs);
+                            if (inRangeMem.length > 0) {
+                                const seen = new Set(ticks.map(t => t.timestamp));
+                                for (const t of inRangeMem) {
+                                    if (!seen.has(t.timestamp)) {
+                                        ticks.push(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Filter valid positive ticks
+                    const validTicks = ticks.filter(t => t && Number(t.price) > 0 && !isNaN(Number(t.price)));
+                    if (validTicks.length === 0) {
+                        // No ticks found for this date (e.g. historical baseline dates before recording started)
+                        continue;
+                    }
+
+                    validTicks.sort((a, b) => a.timestamp - b.timestamp);
+
+                    const open = Number(validTicks[0].price);
+                    const close = Number(validTicks[validTicks.length - 1].price);
                     let high = open;
                     let low = open;
-                    ticks.forEach(t => {
-                        if (t.price > high) high = t.price;
-                        if (t.price < low && t.price > 0) low = t.price;
+                    for (let i = 0; i < validTicks.length; i++) {
+                        const p = Number(validTicks[i].price);
+                        if (p > high) high = p;
+                        if (p < low && p > 0) low = p;
+                    }
+
+                    const lastTs = validTicks[validTicks.length - 1].timestamp || Date.now();
+
+                    // Upsert into prices table directly
+                    const updRes = await queryD1(
+                        "UPDATE prices SET open = ?, high = ?, low = ?, close = ?, timestamp = ? WHERE asset = ? AND date = ?",
+                        [open, high, low, close, lastTs, asset, dateStr]
+                    );
+
+                    if (updRes?.result?.[0]?.meta?.changes === 0) {
+                        await queryD1(
+                            "INSERT INTO prices (asset, date, open, high, low, close, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            [asset, dateStr, open, high, low, close, lastTs]
+                        );
+                    }
+
+                    // If not yet archived in daily_tick_archives, archive now for 1-row fast reading
+                    if (!archRow && validTicks.length > 0) {
+                        try {
+                            const jsonStr = JSON.stringify(validTicks);
+                            await queryD1(
+                                "INSERT OR REPLACE INTO daily_tick_archives (asset, date, ticks_json) VALUES (?, ?, ?)",
+                                [asset, dateStr, jsonStr]
+                            );
+                        } catch (e) {}
+                    }
+
+                    summary[asset].updatedDates++;
+                    summary[asset].dates.push({
+                        date: dateStr,
+                        ticksCount: validTicks.length,
+                        open,
+                        high,
+                        low,
+                        close
                     });
-                    await saveDailySummary(asset, dateStr, open, high, low, close);
+                    logDebug(`[RECALC MATCH] ${asset} ${dateStr} (${validTicks.length} ticks) -> O:${open}, H:${high}, L:${low}, C:${close}`);
+                } catch (dateErr) {
+                    logDebug(`[RECALC DATE ERROR] ${asset} ${dateStr}: ${dateErr.message}`);
                 }
             }
+            logDebug(`[RECALC] ${asset}: Successfully synchronized ${summary[asset].updatedDates} dates!`);
         }
-        logDebug("[RECALC] All 5 assets' daily OHLC summaries successfully recalculated from ticks!");
+
+        historicalCache.clear();
+        loggedDatesCache.clear();
+        logDebug("[RECALC COMPLETE] All historical daily OHLC rates re-calculated and synchronized from ticks!");
+        return summary;
     } catch (e) {
-        logDebug(`Recalculate error: ${e.message}`);
+        logDebug(`[RECALC FATAL] Recalculate error: ${e.message}`);
+        throw e;
     }
 }
 
@@ -2080,6 +2270,7 @@ async function initDatabaseIndexes() {
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         await ensureHistoricalBaselines();
+        await recalculateAllOHLCFromTicks();
         await preloadLatestOhlcFromD1();
         await preloadTodayTicksFromD1();
     } catch (e) {
