@@ -163,31 +163,8 @@ function isMcxMarketOpenNow() {
     return secondsSinceMidnight >= startSeconds && secondsSinceMidnight <= endSeconds;
 }
 
-// Check if International Spot Gold / Silver market is actively open right now
+// Check if International Spot Gold / Silver market is actively open right now (Active 7 days a week continuously when feed is broadcasting)
 function isSpotMarketOpenNow() {
-    const d = new Date();
-    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
-    const istDay = istTime.getUTCDay(); // 0 = Sunday, 6 = Saturday
-    const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
-
-    // Sunday: Closed all day
-    if (istDay === 0) return false;
-
-    // Saturday: Closes at 02:30:00 AM IST (Summer DST) or 03:30:00 AM IST (Winter)
-    if (istDay === 6) {
-        const dst = isUsDst(istTime);
-        const closeSeconds = dst ? (2 * 3600 + 30 * 60) : (3 * 3600 + 30 * 60);
-        return secondsSinceMidnight <= closeSeconds;
-    }
-
-    // Monday: Opens at 03:31:00 AM IST (Summer DST) or 04:31:00 AM IST (Winter)
-    if (istDay === 1) {
-        const dst = isUsDst(istTime);
-        const openSeconds = dst ? (3 * 3600 + 31 * 60) : (4 * 3600 + 31 * 60);
-        return secondsSinceMidnight >= openSeconds;
-    }
-
-    // Tuesday to Friday: Open 24 hours
     return true;
 }
 
