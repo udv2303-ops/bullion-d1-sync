@@ -153,13 +153,10 @@ function getSpotAssetDateString() {
     return getAssetDateStringForTimestamp("XAU_USD", Date.now());
 }
 
-// Check if MCX and Indian GST Bullion market is actively open right now
+// Check if MCX Bullion market is actively open right now (09:00:10 AM to 11:50:00 PM IST, 7 days a week)
 function isMcxMarketOpenNow() {
     const d = new Date();
     const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
-    const istDay = istTime.getUTCDay(); // 0 = Sunday, 6 = Saturday
-    if (istDay === 0 || istDay === 6) return false; // Saturday & Sunday completely closed
-
     const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
     const startSeconds = 9 * 3600 + 10; // 09:00:10 AM IST
     const endSeconds = 23 * 3600 + 50 * 60; // 11:50:00 PM IST
@@ -194,25 +191,13 @@ function isSpotMarketOpenNow() {
     return true;
 }
 
-// Check if Indian GST Bullion (physical spot) market is actively open right now
+// Check if Indian GST Bullion (physical spot) market is actively open right now (09:00:10 AM to 11:50:00 PM IST, 7 days a week)
 function isGstMarketOpenNow() {
     const d = new Date();
     const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
-    const istDay = istTime.getUTCDay(); // 0 = Sunday, 6 = Saturday
-    if (istDay === 0) return false; // Sunday completely closed
-
     const secondsSinceMidnight = istTime.getUTCHours() * 3600 + istTime.getUTCMinutes() * 60 + istTime.getUTCSeconds();
-    
-    // Saturday: Physical bullion market is open (09:00:10 AM to 08:30:00 PM IST)
-    if (istDay === 6) {
-        const startSecondsSat = 9 * 3600 + 10; // 09:00:10 AM IST
-        const endSecondsSat = 20 * 3600 + 30 * 60; // 08:30:00 PM IST
-        return secondsSinceMidnight >= startSecondsSat && secondsSinceMidnight <= endSecondsSat;
-    }
-
-    // Monday to Friday: 09:00:10 AM to 11:50:00 PM IST
-    const startSeconds = 9 * 3600 + 10;
-    const endSeconds = 23 * 3600 + 50 * 60;
+    const startSeconds = 9 * 3600 + 10; // 09:00:10 AM IST
+    const endSeconds = 23 * 3600 + 50 * 60; // 11:50:00 PM IST
     return secondsSinceMidnight >= startSeconds && secondsSinceMidnight <= endSeconds;
 }
 
@@ -597,12 +582,23 @@ async function syncHarikalaBroadcast() {
             
             const name = parts[1]; // Index 1 is the asset name
             const closeVal = toDoubleSafe(parts[3]); // Index 3 is the close/ask price
-            const bidVal = parts[2] === '-' ? closeVal : toDoubleSafe(parts[2]); // Index 2 is bid/open
-            const highVal = parts[4] ? toDoubleSafe(parts[4]) : closeVal;
-            const lowVal = parts[5] ? toDoubleSafe(parts[5]) : closeVal;
-            const openVal = bidVal > 0 ? bidVal : closeVal;
-            
             if (closeVal <= 0.0) continue;
+
+            const d = new Date();
+            const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+            const istDay = istTime.getUTCDay(); // 0 = Sunday, 6 = Saturday
+            const isWeekend = (istDay === 0 || istDay === 6);
+
+            // On weekdays, use exchange high/low. On weekends, avoid copying Friday's exchange range; start from today's live rate!
+            let highVal = parts[4] ? toDoubleSafe(parts[4]) : closeVal;
+            let lowVal = parts[5] ? toDoubleSafe(parts[5]) : closeVal;
+            if (isWeekend && (name === "GOLD FUTURE" || name === "SILVER FUTURE")) {
+                highVal = closeVal;
+                lowVal = closeVal;
+            }
+
+            // Real Open is NEVER the Bid (parts[2]). At 09:00:10 AM IST, Open is established from closeVal!
+            const openVal = closeVal;
             
             if (name === "GOLD") {
                 // Spot Gold
@@ -1380,14 +1376,8 @@ http.createServer(async (req, res) => {
                 const datesList = results.map(r => r.date).filter(Boolean);
 
                 const todayStr = getIstDateString();
-                const istDay = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCDay();
-                const isWeekend = (istDay === 0 || istDay === 6);
-                const isMcx = (asset === "GOLD_MCX" || asset === "SILVER_MCX");
-
-                if (!isMcx || !isWeekend) {
-                    if (!datesList.includes(todayStr)) {
-                        datesList.unshift(todayStr);
-                    }
+                if (!datesList.includes(todayStr)) {
+                    datesList.unshift(todayStr);
                 }
 
                 const jsonStr = JSON.stringify(datesList);
@@ -1981,18 +1971,6 @@ async function deduplicateD1PricesTable() {
     }
 }
 
-// Remove any phantom weekend rows created for MCX (since MCX is closed on weekends)
-async function cleanupWeekendMcxRows() {
-    try {
-        const res = await queryD1("DELETE FROM prices WHERE asset IN ('GOLD_MCX', 'SILVER_MCX') AND date = '2026-09-12'");
-        if (res?.result?.[0]?.meta?.changes > 0) {
-            logDebug(`[CLEANUP] Removed ${res.result[0].meta.changes} fake Saturday MCX rows from D1.`);
-        }
-    } catch (e) {
-        logDebug(`[CLEANUP ERROR] ${e.message}`);
-    }
-}
-
 // Preload latest OHLC from Cloudflare D1 so server restarts never lose or overwrite morning Open
 async function preloadLatestOhlcFromD1() {
     try {
@@ -2033,7 +2011,6 @@ async function initDatabaseIndexes() {
         await queryD1("CREATE INDEX IF NOT EXISTS idx_intraday_prices_asset_timestamp ON intraday_prices(asset, timestamp)");
         await queryD1("CREATE INDEX IF NOT EXISTS idx_prices_asset_date ON prices(asset, date)");
         await ensureHistoricalBaselines();
-        await cleanupWeekendMcxRows();
         await preloadLatestOhlcFromD1();
     } catch (e) {
         logDebug(`[INDEX INIT ERROR] Failed to create database indexes: ${e.message}`);
